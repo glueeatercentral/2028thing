@@ -64,7 +64,7 @@ body { font: 14px/1.4 var(--font-ui); -webkit-font-smoothing: antialiased; }
 button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .seg .tag { font: 600 10px var(--font-ui); letter-spacing: 0.09em; text-transform: uppercase; color: var(--ink-dim); opacity: .7; align-self: center; padding: 0 6px 0 8px; }
 #hints {
-  left: max(16px, env(safe-area-inset-left, 0px)); bottom: calc(72px + env(safe-area-inset-bottom, 0px));
+  left: max(16px, env(safe-area-inset-left, 0px)); top: calc(98px + env(safe-area-inset-top, 0px));
   padding: 10px 14px; font-size: 12.5px; color: var(--ink-dim); display: grid; gap: 3px; transition: opacity .6s; max-width: 300px;
 }
 #hints b { color: var(--ink); font-weight: 600; }
@@ -233,6 +233,7 @@ const QUALITY = {
 const TANK = { W: 0.60, H: 0.34, D: 0.36, glass: 0.006, base: 0.008 };
 const MUG = { Ro: 0.050, H: 0.110 };
 const BALL_R = 0.042;
+const TAP_R = 0.0105, TAP_V = 0.6;   // tap stream radius (m) and exit speed (m/s)
 const KEY = V3.norm([0.28, 1.0, 0.34]); // direction toward the main softbox
 
 const params = new URLSearchParams(location.search);
@@ -825,6 +826,19 @@ const PARTICLE_WGSL = VIEW_WGSL + /* wgsl */`
 @group(0) @binding(0) var<uniform> V: View;
 @group(0) @binding(1) var<storage, read> P: array<vec4<f32>>;
 @group(0) @binding(3) var<storage, read> surfIds: array<u32>;
+@group(0) @binding(4) var<storage, read> PV: array<vec4<f32>>;
+
+// Stretch an impostor along its screen-space velocity (about one substep of travel), so a falling
+// stream reads as a continuous column and fast droplets as short streaks. Resting water is untouched.
+fn stretch(c: vec2<f32>, vel: vec3<f32>, r: f32) -> vec2<f32> {
+  let vv = (V.view * vec4<f32>(vel * V.grid.w, 0.0)).xy;
+  let sp = length(vv);
+  if (sp < 0.05) { return c * r; }
+  let d = vv / sp;
+  let s = min(1.0 + sp * V.camPos.w / r, 4.0);
+  let along = dot(c, d);
+  return (c + d * along * (s - 1.0)) * r;
+}
 
 struct POut {
   @builtin(position) pos: vec4<f32>,
@@ -845,13 +859,14 @@ fn hexCorner(i: u32) -> vec2<f32> {
 // Opaque hexagon impostors without discard or frag_depth, so hidden-surface
 // removal and early depth rejection stay effective on tile-based GPUs.
 @vertex fn vsDepth(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> POut {
-  let p = P[surfIds[4u + ii]];
+  let pid = surfIds[4u + ii];
+  let p = P[pid];
   let wp = V.grid.xyz + p.xyz * V.grid.w;
   let vp = (V.view * vec4<f32>(wp, 1.0)).xyz;
   let c = hexCorner(vi);
   let r = V.fluid.x;
   var o: POut;
-  o.pos = V.proj * vec4<f32>(vp.xy + c * r, vp.z + r, 1.0);
+  o.pos = V.proj * vec4<f32>(vp.xy + stretch(c, PV[pid].xyz, r), vp.z + r, 1.0);
   o.uv = c; o.vz = vp.z; o.foam = p.w;
   return o;
 }
@@ -872,7 +887,7 @@ const THICK_WGSL = PARTICLE_WGSL + /* wgsl */`
   let c = q[vi];
   let r = V.fluid.x * 1.25;
   var o: POut;
-  o.pos = V.proj * vec4<f32>(vp.xy + c * r, vp.z, 1.0);
+  o.pos = V.proj * vec4<f32>(vp.xy + stretch(c, PV[ii].xyz, r), vp.z, 1.0);
   o.uv = c; o.vz = vp.z; o.foam = p.w;
   return o;
 }
@@ -1607,8 +1622,8 @@ async function main() {
   };
 
   const simBGL = bgl([ubo(CS, true), sto(CS), sto(CS), sto(CS), sto(CS), sto(CS), sto(CS), sto(CS), sto(CS)]);
-  const partBGL = device.createBindGroupLayout({ entries: [{ binding: 0, ...ubo(VS | FS) }, { binding: 1, ...sto(VS, true) }, { binding: 3, ...sto(VS, true) }] });
-  const thickBGL = bgl([ubo(VS | FS), sto(VS, true), tex(FS, 'depth')]);
+  const partBGL = device.createBindGroupLayout({ entries: [{ binding: 0, ...ubo(VS | FS) }, { binding: 1, ...sto(VS, true) }, { binding: 3, ...sto(VS, true) }, { binding: 4, ...sto(VS, true) }] });
+  const thickBGL = device.createBindGroupLayout({ entries: [{ binding: 0, ...ubo(VS | FS) }, { binding: 1, ...sto(VS, true) }, { binding: 2, ...tex(FS, 'depth') }, { binding: 4, ...sto(VS, true) }] });
   const smoothBGL = bgl([ubo(FS), tex(FS, 'unfilterable-float')]);
   const compBGL = bgl([ubo(FS), tex(FS), tex(FS, 'unfilterable-float'), tex(FS), smp(FS)]);
   const meshBGL0 = bgl([ubo(VS | FS), tex(FS), smp(FS)]);
@@ -1654,7 +1669,6 @@ async function main() {
     }),
     opaque: mkMesh('fsOpaque', HDR, depthRW, 'none'),
     glassFar: mkMesh('fsGlass', HDR, depthRO, 'back', premul),
-    opaqueNear: mkMesh('fsOpaque', HDR, undefined, 'none'),
     glassNear: mkMesh('fsGlass', HDR, undefined, 'back', premul),
     mask: mkMesh('fsMask', 'r8unorm', undefined, 'none'),
     depth: device.createRenderPipeline({
@@ -1828,8 +1842,8 @@ async function main() {
     lightData.set(lo, 128);
     device.queue.writeBuffer(lightUBO, 0, lightData);
 
-    const partLightBG = device.createBindGroup({ layout: partBGL, entries: [{ binding: 0, resource: { buffer: lightUBO } }, { binding: 1, resource: { buffer: posB } }, { binding: 3, resource: { buffer: surfB } }] });
-    const partCamBG = device.createBindGroup({ layout: partBGL, entries: [{ binding: 0, resource: { buffer: camUBO } }, { binding: 1, resource: { buffer: posB } }, { binding: 3, resource: { buffer: surfB } }] });
+    const partLightBG = device.createBindGroup({ layout: partBGL, entries: [{ binding: 0, resource: { buffer: lightUBO } }, { binding: 1, resource: { buffer: posB } }, { binding: 3, resource: { buffer: surfB } }, { binding: 4, resource: { buffer: velB } }] });
+    const partCamBG = device.createBindGroup({ layout: partBGL, entries: [{ binding: 0, resource: { buffer: camUBO } }, { binding: 1, resource: { buffer: posB } }, { binding: 3, resource: { buffer: surfB } }, { binding: 4, resource: { buffer: velB } }] });
     const lightSmoothH = device.createBindGroup({ layout: smoothBGL, entries: [{ binding: 0, resource: { buffer: lightUBO } }, { binding: 1, resource: lightZ.createView() }] });
     const lightSmoothV = device.createBindGroup({ layout: smoothBGL, entries: [{ binding: 0, resource: { buffer: lightUBO } }, { binding: 1, resource: lightZ2.createView() }] });
     const causBG = device.createBindGroup({ layout: causBGL, entries: [
@@ -1893,7 +1907,7 @@ async function main() {
     let bw = hw, bh = hh;
     for (let i = 0; i < 5; i++) { S.bloom.push(mk(HDR, Math.max(1, bw), Math.max(1, bh))); bw = Math.ceil(bw / 2); bh = Math.ceil(bh / 2); }
     S.thickBG = device.createBindGroup({ layout: thickBGL, entries: [
-      { binding: 0, resource: { buffer: camUBO } }, { binding: 1, resource: { buffer: W.posB } }, { binding: 2, resource: S.depth.createView() }] });
+      { binding: 0, resource: { buffer: camUBO } }, { binding: 1, resource: { buffer: W.posB } }, { binding: 2, resource: S.depth.createView() }, { binding: 4, resource: { buffer: W.velB } }] });
     S.smooth1 = device.createBindGroup({ layout: smoothBGL, entries: [{ binding: 0, resource: { buffer: camUBO } }, { binding: 1, resource: S.fluidZ.createView() }] });
     S.smooth2 = device.createBindGroup({ layout: smoothBGL, entries: [{ binding: 0, resource: { buffer: camUBO } }, { binding: 1, resource: S.fluidZ2.createView() }] });
     S.compBG = device.createBindGroup({ layout: compBGL, entries: [
@@ -1958,6 +1972,7 @@ async function main() {
     enc.clearBuffer(W.cellB); enc.clearBuffer(W.pressB);
     device.queue.submit([enc.finish()]);
     state.scene = name;
+    for (const x of document.querySelectorAll('[data-scene]')) x.setAttribute('aria-pressed', String(x.dataset.scene === name));
   }
 
   // =====================================================================
@@ -2075,7 +2090,7 @@ async function main() {
     // tap flow: stream area x exit speed, in particles, carried over between substeps
     const tapCount = [];
     for (let s = 0; s < nsub; s++) {
-      if (state.tap) { W.tapAcc += Math.PI * 0.0085 ** 2 * 0.55 * dt / ((h * 0.5) ** 3); }
+      if (state.tap) { W.tapAcc += Math.PI * TAP_R ** 2 * TAP_V * dt / ((h * 0.5) ** 3); }
       const c = Math.floor(W.tapAcc); W.tapAcc -= c; tapCount.push(c);
     }
     for (let s = 0; s < nsub; s++) {
@@ -2102,8 +2117,8 @@ async function main() {
       simF.set([dt, g, 0.96, 0.05], base + 80);
       simF.set([7.85, 1.72, 0.28, 5.0 / h], base + 84);
       simU32[base + 88] = W.count; simU32[base + 89] = W.frame; simU32[base + 90] = s === nsub - 1 ? 1 : 0;
-      simF.set([...toGrid(W.tapEnd), 0.0085 / h], base + 96);
-      simF.set([-0.55 / h, tapCount[s], state.tap ? 1 : 0, Math.random()], base + 100);
+      simF.set([...toGrid(W.tapEnd), TAP_R / h], base + 96);
+      simF.set([-TAP_V / h, tapCount[s], state.tap ? 1 : 0, Math.random()], base + 100);
       simF.set([W.calm > 0 ? 0 : 0.35, Math.exp(-dt / 1.1), 3.5 * Math.abs(g), performance.now() / 1000], base + 92);
     }
     device.queue.writeBuffer(W.simUBO, 0, simData, 0, nsub * 512);
@@ -2117,7 +2132,7 @@ async function main() {
     camData.set(M4.inv(camInfo.view), 48);
     camData.set(M4.inv(camInfo.proj), 64);
     camData.set(camInfo.ivp, 80);
-    camData.set([...camInfo.eye, time], 96);
+    camData.set([...camInfo.eye, 1 / 90], 96);
     camData.set([S.w, S.h, 1 / S.w, 1 / S.h], 100);
     camData.set([...origin, h], 104);
     const r = 0.62 * h;
@@ -2183,24 +2198,8 @@ async function main() {
     pass.end();
   }
 
-  const stopAt = params.has('stop') ? +params.get('stop') : 99;
   function encodeView(enc, S, target) {
     const near = W.walls.map((w) => V3.dot(V3.sub(camInfo.eye, w.c), w.n) > 0);
-    if (stopAt <= 0) return;
-    if (params.has('only')) {
-      const which = params.get('only');
-      const pass = enc.beginRenderPass({
-        colorAttachments: [{ view: S.scene.createView(), loadOp: 'clear', storeOp: 'store', clearValue: [0, 0, 0, 1e4] }],
-        depthStencilAttachment: { view: S.depth.createView(), depthLoadOp: 'clear', depthStoreOp: 'store', depthClearValue: 1 },
-      });
-      pass.setBindGroup(0, W.meshCamBG);
-      if (which === 'bg') { pass.setPipeline(pipes.bg); pass.draw(3); }
-      if (which === 'floor') { pass.setPipeline(pipes.opaque); drawObj(pass, W.floorObj); }
-      if (which === 'mug') { pass.setPipeline(pipes.opaque); drawObj(pass, W.mugObj); }
-      if (which === 'glass') { pass.setPipeline(pipes.glassFar); drawObj(pass, W.basePane); }
-      pass.end();
-      return;
-    }
     // ---- opaque scene ----
     let pass = enc.beginRenderPass({
       colorAttachments: [{ view: S.scene.createView(), loadOp: 'clear', storeOp: 'store', clearValue: [0, 0, 0, 1e4] }],
@@ -2218,12 +2217,10 @@ async function main() {
     drawObj(pass, W.basePane);
     W.walls.forEach((w, i) => { if (!near[i]) drawObj(pass, w); });
     pass.end();
-    if (stopAt <= 1) return;
     // ---- water thickness (half res, before particle depths land in the depth buffer) ----
     pass = enc.beginRenderPass({ colorAttachments: [{ view: S.thick.createView(), loadOp: 'clear', storeOp: 'store', clearValue: [0, 0, 0, 0] }] });
     pass.setPipeline(pipes.thick); pass.setBindGroup(0, S.thickBG); pass.draw(6, W.count);
     pass.end();
-    if (stopAt <= 2) return;
     // ---- water surface depth ----
     pass = enc.beginRenderPass({
       colorAttachments: [{ view: S.fluidZ.createView(), loadOp: 'clear', storeOp: 'store', clearValue: [0, 0, 0, 0] }],
@@ -2231,7 +2228,6 @@ async function main() {
     });
     pass.setPipeline(pipes.depth); pass.setBindGroup(0, W.partCamBG); pass.drawIndirect(W.surfB, 0);
     pass.end();
-    if (stopAt <= 3) return;
     const fsPass = (pipe, bg, tgt) => {
       const p = enc.beginRenderPass({ colorAttachments: [{ view: tgt.createView(), loadOp: 'clear', storeOp: 'store', clearValue: [0, 0, 0, 0] }] });
       p.setPipeline(pipe); p.setBindGroup(0, bg); p.draw(3); p.end();
@@ -2240,7 +2236,6 @@ async function main() {
       fsPass(pipes.smoothH, S.smooth1, S.fluidZ2);
       fsPass(pipes.smoothV, S.smooth2, S.fluidZ);
     }
-    if (stopAt <= 4) return;
     // ---- composite water over the scene ----
     pass = enc.beginRenderPass({ colorAttachments: [{ view: S.hdr.createView(), loadOp: 'clear', storeOp: 'store', clearValue: [0, 0, 0, 1] }] });
     pass.setPipeline(pipes.composite); pass.setBindGroup(0, S.compBG); pass.draw(3);
@@ -2249,7 +2244,6 @@ async function main() {
     pass.setPipeline(pipes.glassNear);
     W.walls.forEach((w, i) => { if (near[i]) drawObj(pass, w); });
     pass.end();
-    if (stopAt <= 5) return;
     // ---- bloom ----
     for (let i = 0; i < S.bloom.length; i++) {
       const p = enc.beginRenderPass({ colorAttachments: [{ view: S.bloom[i].createView(), loadOp: 'clear', storeOp: 'store', clearValue: [0, 0, 0, 1] }] });
@@ -2410,10 +2404,7 @@ async function main() {
     if (t === 'ball') tool.ballPos = tool.ballPrev = clampBall(tool.target);
   }
   for (const b of document.querySelectorAll('[data-tool]')) b.addEventListener('click', () => setTool(b.dataset.tool));
-  for (const b of document.querySelectorAll('[data-scene]')) b.addEventListener('click', () => {
-    resetScene(b.dataset.scene);
-    for (const x of document.querySelectorAll('[data-scene]')) x.setAttribute('aria-pressed', String(x === b));
-  });
+  for (const b of document.querySelectorAll('[data-scene]')) b.addEventListener('click', () => resetScene(b.dataset.scene));
   for (const b of document.querySelectorAll('[data-q]')) b.addEventListener('click', () => { if (b.dataset.q !== qualityName) setQuality(b.dataset.q); });
   const soundBtn = $('#soundBtn');
   soundBtn.addEventListener('click', () => {
