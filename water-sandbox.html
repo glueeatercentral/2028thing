@@ -1,0 +1,2572 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Water Sandbox</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: full-bleed WebGPU canvas; the UI is a few frosted panels pinned to the corners plus one dock at bottom center. */
+:root {
+  --bg: #0b0d0e;
+  --ink: #edf1ef;
+  --ink-dim: #9aa5a2;
+  --panel: rgba(16, 20, 22, 0.58);
+  --panel-edge: rgba(220, 240, 236, 0.10);
+  --chip: rgba(255, 255, 255, 0.06);
+  --chip-on: rgba(134, 214, 206, 0.20);
+  --accent: #86d6ce;
+  --mug: #e0673c;
+  --font-ui: "Schibsted Grotesk", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-data: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  color-scheme: dark;
+}
+[hidden] { display: none !important; }
+html, body { height: 100%; margin: 0; background: var(--bg); color: var(--ink); overflow: hidden; }
+body { font: 14px/1.4 var(--font-ui); -webkit-font-smoothing: antialiased; }
+#view { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; cursor: crosshair; outline: none; }
+.panel {
+  position: fixed; background: var(--panel); border: 1px solid var(--panel-edge);
+  backdrop-filter: blur(14px) saturate(1.2); -webkit-backdrop-filter: blur(14px) saturate(1.2);
+  border-radius: 14px; color: var(--ink);
+}
+#brand {
+  top: calc(14px + env(safe-area-inset-top, 0px)); left: max(16px, env(safe-area-inset-left, 0px));
+  padding: 10px 14px 10px 14px; display: grid; gap: 2px; pointer-events: none;
+}
+#brand h1 { margin: 0; font-size: 17px; font-weight: 700; letter-spacing: -0.01em; }
+#brand h1 span { color: var(--accent); font-weight: 500; }
+#stats { font: 11px/1.45 var(--font-data); color: var(--ink-dim); font-variant-numeric: tabular-nums; white-space: pre; }
+#gauge {
+  top: calc(14px + env(safe-area-inset-top, 0px)); right: max(16px, env(safe-area-inset-right, 0px));
+  padding: 10px 12px; display: flex; align-items: center; gap: 10px; pointer-events: none;
+}
+#gauge .bar { width: 10px; height: 38px; border-radius: 3px; background: var(--chip); position: relative; overflow: hidden; border: 1px solid var(--panel-edge); }
+#gauge .fill { position: absolute; left: 0; right: 0; bottom: 0; height: 0%; background: linear-gradient(to top, #3fa7b3, var(--accent)); transition: height .15s linear; }
+#gauge .lbl { display: grid; gap: 1px; }
+#gauge .lbl b { font: 600 11px var(--font-ui); letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-dim); }
+#gauge .lbl span { font: 500 15px var(--font-data); font-variant-numeric: tabular-nums; }
+#dock {
+  bottom: calc(14px + env(safe-area-inset-bottom, 0px)); left: 50%; transform: translateX(-50%);
+  padding: 6px; display: flex; flex-wrap: wrap; justify-content: center; gap: 6px; max-width: calc(100vw - 32px); box-sizing: border-box;
+}
+.seg { display: flex; gap: 2px; background: var(--chip); border-radius: 10px; padding: 2px; }
+.seg button, .solo {
+  font: 500 13px var(--font-ui); color: var(--ink-dim); background: transparent; border: 0; border-radius: 8px;
+  padding: 7px 11px; cursor: pointer; transition: background .15s, color .15s; white-space: nowrap;
+}
+.seg button:hover, .solo:hover { color: var(--ink); background: rgba(255,255,255,0.05); }
+.seg button[aria-pressed="true"], .solo[aria-pressed="true"] { color: var(--ink); background: var(--chip-on); }
+.solo { background: var(--chip); }
+button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.seg .tag { font: 600 10px var(--font-ui); letter-spacing: 0.09em; text-transform: uppercase; color: var(--ink-dim); opacity: .7; align-self: center; padding: 0 6px 0 8px; }
+#hints {
+  left: max(16px, env(safe-area-inset-left, 0px)); bottom: calc(72px + env(safe-area-inset-bottom, 0px));
+  padding: 10px 14px; font-size: 12.5px; color: var(--ink-dim); display: grid; gap: 3px; transition: opacity .6s; max-width: 300px;
+}
+#hints b { color: var(--ink); font-weight: 600; }
+#hints kbd { font: 500 11px var(--font-data); color: var(--ink); background: var(--chip); border: 1px solid var(--panel-edge); border-radius: 4px; padding: 0 4px; }
+#hints.faded { opacity: 0; pointer-events: none; }
+#pourBtn { display: none; }
+@media (hover: none) and (pointer: coarse) {
+  #pourBtn { display: inline-block; }
+  #hints { display: none; }
+}
+#msg {
+  position: fixed; inset: 0; display: grid; place-items: center; padding: 24px max(16px, env(safe-area-inset-right, 0px)) 24px max(16px, env(safe-area-inset-left, 0px));
+  background: var(--bg); z-index: 5; text-align: center;
+}
+#msg .card { max-width: 460px; display: grid; gap: 10px; }
+#msg h2 { margin: 0; font-size: 20px; text-wrap: balance; }
+#msg p { margin: 0; color: var(--ink-dim); }
+#msg .spin { width: 28px; height: 28px; border-radius: 50%; border: 2px solid var(--chip); border-top-color: var(--accent); margin: 0 auto; animation: spin 0.9s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { #msg .spin { animation: none; } #gauge .fill { transition: none; } }
+@media (max-width: 640px) {
+  #brand { padding: 8px 11px; }
+  #brand h1 { font-size: 15px; }
+  #stats { display: none; }
+  .seg button, .solo { padding: 7px 9px; font-size: 12.5px; }
+  .seg .tag { display: none; }
+}
+</style>
+</head>
+<body>
+<canvas id="view" tabindex="0" aria-label="Water simulation. Move the pointer to carry the mug, hold to pour."></canvas>
+
+<div id="brand" class="panel">
+  <h1>Water Sandbox <span>FLIP</span></h1>
+  <div id="stats">starting…</div>
+</div>
+
+<div id="gauge" class="panel" aria-live="off">
+  <div class="bar"><div class="fill" id="gaugeFill"></div></div>
+  <div class="lbl"><b>In mug</b><span id="gaugeVal">0%</span></div>
+</div>
+
+<div id="hints" class="panel">
+  <div><b>Move</b> to carry the mug</div>
+  <div><b>Hold click</b> or <kbd>Space</kbd> to pour, <kbd>Q</kbd>/<kbd>E</kbd> tilt</div>
+  <div><b>Scroll</b> or <kbd>W</kbd>/<kbd>S</kbd> to push it in or pull it out</div>
+  <div><b>Right-drag</b>, <b>Shift-drag</b> or <kbd>A</kbd>/<kbd>D</kbd> to look around</div>
+  <div><b>Pinch</b> or <b>Ctrl-scroll</b> to zoom, <kbd>R</kbd> to reset</div>
+  <div><kbd>T</kbd> runs the tap: hold the mug under it to fill</div>
+</div>
+
+<div id="dock" class="panel" role="toolbar" aria-label="Sandbox controls">
+  <div class="seg" role="group" aria-label="Tool">
+    <span class="tag">Tool</span>
+    <button id="toolMug" data-tool="mug" aria-pressed="true">Mug</button>
+    <button id="toolBall" data-tool="ball" aria-pressed="false">Ball</button>
+    <button id="toolHand" data-tool="none" aria-pressed="false">Hands off</button>
+  </div>
+  <button id="pourBtn" class="solo" aria-pressed="false">Hold to pour</button>
+  <div class="seg" role="group" aria-label="Scene">
+    <span class="tag">Scene</span>
+    <button id="sceneStill" data-scene="still" aria-pressed="true">Still</button>
+    <button id="sceneSlosh" data-scene="slosh" aria-pressed="false">Slosh</button>
+    <button id="sceneDrop" data-scene="drop" aria-pressed="false">Drop</button>
+  </div>
+  <div class="seg" role="group" aria-label="Quality">
+    <span class="tag">Detail</span>
+    <button id="qLow" data-q="low" aria-pressed="false">Low</button>
+    <button id="qMed" data-q="medium" aria-pressed="true">Med</button>
+    <button id="qHigh" data-q="high" aria-pressed="false">High</button>
+  </div>
+  <button id="tapBtn" class="solo" aria-pressed="false">Tap off</button>
+  <button id="soundBtn" class="solo" aria-pressed="true">Sound on</button>
+</div>
+
+<div id="msg"><div class="card"><div class="spin"></div><h2>Filling the tank</h2><p>Compiling shaders and pouring a couple hundred thousand particles.</p></div></div>
+
+<script type="module">
+'use strict';
+const $ = (s) => document.querySelector(s);
+const canvas = $('#view');
+const msgEl = $('#msg');
+function showMessage(title, body) {
+  msgEl.innerHTML = `<div class="card"><h2>${title}</h2><p>${body}</p></div>`;
+  msgEl.hidden = false;
+}
+
+// =====================================================================
+// Small linear algebra (column-major 4x4, WebGPU clip depth 0..1)
+// =====================================================================
+const V3 = {
+  add: (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]],
+  sub: (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]],
+  scale: (a, s) => [a[0] * s, a[1] * s, a[2] * s],
+  dot: (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2],
+  cross: (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]],
+  len: (a) => Math.hypot(a[0], a[1], a[2]),
+  norm: (a) => { const l = Math.hypot(a[0], a[1], a[2]) || 1; return [a[0] / l, a[1] / l, a[2] / l]; },
+};
+const M4 = {
+  ident() { const m = new Float32Array(16); m[0] = m[5] = m[10] = m[15] = 1; return m; },
+  mul(a, b) {
+    const o = new Float32Array(16);
+    for (let c = 0; c < 4; c++) for (let r = 0; r < 4; r++) {
+      o[c * 4 + r] = a[r] * b[c * 4] + a[4 + r] * b[c * 4 + 1] + a[8 + r] * b[c * 4 + 2] + a[12 + r] * b[c * 4 + 3];
+    }
+    return o;
+  },
+  persp(fovy, aspect, n, f) {
+    const t = 1 / Math.tan(fovy / 2), m = new Float32Array(16);
+    m[0] = t / aspect; m[5] = t; m[10] = f / (n - f); m[11] = -1; m[14] = n * f / (n - f);
+    return m;
+  },
+  ortho(l, r, b, t, n, f) {
+    const m = new Float32Array(16);
+    m[0] = 2 / (r - l); m[5] = 2 / (t - b); m[10] = 1 / (n - f);
+    m[12] = -(r + l) / (r - l); m[13] = -(t + b) / (t - b); m[14] = n / (n - f); m[15] = 1;
+    return m;
+  },
+  lookAt(e, c, up) {
+    const z = V3.norm(V3.sub(e, c)), x = V3.norm(V3.cross(up, z)), y = V3.cross(z, x);
+    const m = new Float32Array(16);
+    m[0] = x[0]; m[1] = y[0]; m[2] = z[0];
+    m[4] = x[1]; m[5] = y[1]; m[6] = z[1];
+    m[8] = x[2]; m[9] = y[2]; m[10] = z[2];
+    m[12] = -V3.dot(x, e); m[13] = -V3.dot(y, e); m[14] = -V3.dot(z, e); m[15] = 1;
+    return m;
+  },
+  trans(x, y, z) { const m = M4.ident(); m[12] = x; m[13] = y; m[14] = z; return m; },
+  rotY(a) { const m = M4.ident(), c = Math.cos(a), s = Math.sin(a); m[0] = c; m[2] = -s; m[8] = s; m[10] = c; return m; },
+  rotZ(a) { const m = M4.ident(), c = Math.cos(a), s = Math.sin(a); m[0] = c; m[1] = s; m[4] = -s; m[5] = c; return m; },
+  scale(s) { const m = M4.ident(); m[0] = m[5] = m[10] = s; return m; },
+  point(m, p) {
+    return [m[0] * p[0] + m[4] * p[1] + m[8] * p[2] + m[12], m[1] * p[0] + m[5] * p[1] + m[9] * p[2] + m[13], m[2] * p[0] + m[6] * p[1] + m[10] * p[2] + m[14]];
+  },
+  inv(m) {
+    const o = new Float32Array(16);
+    const [a00, a01, a02, a03, a10, a11, a12, a13, a20, a21, a22, a23, a30, a31, a32, a33] = m;
+    const b00 = a00 * a11 - a01 * a10, b01 = a00 * a12 - a02 * a10, b02 = a00 * a13 - a03 * a10;
+    const b03 = a01 * a12 - a02 * a11, b04 = a01 * a13 - a03 * a11, b05 = a02 * a13 - a03 * a12;
+    const b06 = a20 * a31 - a21 * a30, b07 = a20 * a32 - a22 * a30, b08 = a20 * a33 - a23 * a30;
+    const b09 = a21 * a32 - a22 * a31, b10 = a21 * a33 - a23 * a31, b11 = a22 * a33 - a23 * a32;
+    let det = b00 * b11 - b01 * b10 + b02 * b09 + b03 * b08 - b04 * b07 + b05 * b06;
+    if (!det) return M4.ident();
+    det = 1 / det;
+    o[0] = (a11 * b11 - a12 * b10 + a13 * b09) * det; o[1] = (a02 * b10 - a01 * b11 - a03 * b09) * det;
+    o[2] = (a31 * b05 - a32 * b04 + a33 * b03) * det; o[3] = (a22 * b04 - a21 * b05 - a23 * b03) * det;
+    o[4] = (a12 * b08 - a10 * b11 - a13 * b07) * det; o[5] = (a00 * b11 - a02 * b08 + a03 * b07) * det;
+    o[6] = (a32 * b02 - a30 * b05 - a33 * b01) * det; o[7] = (a20 * b05 - a22 * b02 + a23 * b01) * det;
+    o[8] = (a10 * b10 - a11 * b08 + a13 * b06) * det; o[9] = (a01 * b08 - a00 * b10 - a03 * b06) * det;
+    o[10] = (a30 * b04 - a31 * b02 + a33 * b00) * det; o[11] = (a21 * b02 - a20 * b04 - a23 * b00) * det;
+    o[12] = (a11 * b07 - a10 * b09 - a12 * b06) * det; o[13] = (a00 * b09 - a01 * b07 + a02 * b06) * det;
+    o[14] = (a31 * b01 - a30 * b03 - a32 * b00) * det; o[15] = (a20 * b03 - a21 * b01 + a22 * b00) * det;
+    return o;
+  },
+};
+
+// =====================================================================
+// Settings
+// =====================================================================
+const QUALITY = {
+  low:    { h: 0.0125, iters: 26, maxSub: 1 / 100, scale: 1.0, maxScale: 1.25, lightRes: 192 },
+  medium: { h: 0.0100, iters: 34, maxSub: 1 / 120, scale: 1.15, maxScale: 1.5, lightRes: 256 },
+  high:   { h: 0.0080, iters: 42, maxSub: 1 / 150, scale: 1.5, maxScale: 2.0, lightRes: 320 },
+};
+const TANK = { W: 0.60, H: 0.34, D: 0.36, glass: 0.006, base: 0.008 };
+const MUG = { Ro: 0.050, H: 0.110 };
+const BALL_R = 0.042;
+const KEY = V3.norm([0.28, 1.0, 0.34]); // direction toward the main softbox
+
+const params = new URLSearchParams(location.search);
+let qualityName = QUALITY[params.get('q')] ? params.get('q') : 'medium';
+const state = {
+  tool: 'mug', scene: 'still', sound: true, tap: false,
+  pour: false, pourKey: false, pourTouch: false, tiltKeys: 0,
+  depth: 0.0, // tool depth along camera-forward (meters, relative to tank center)
+  pointer: { x: 0, y: 0, has: false },
+};
+
+// =====================================================================
+// WGSL: shared environment / helpers (generated so the light layout lives in one place)
+// =====================================================================
+function envWGSL() {
+  const boxes = [
+    { d: KEY, hs: [0.44, 0.30], I: 7.0, c: [1.0, 0.97, 0.92] },
+    { d: V3.norm([-1.0, 0.32, -0.42]), hs: [0.055, 0.55], I: 4.5, c: [0.86, 0.93, 1.0] },
+    { d: V3.norm([1.0, 0.25, 0.30]), hs: [0.075, 0.45], I: 2.0, c: [1.0, 0.95, 0.88] },
+    { d: V3.norm([0.0, 0.18, -1.0]), hs: [0.9, 0.16], I: 0.55, c: [0.9, 0.95, 1.0] },
+    // big diffuser panels low behind the set: what a calm water surface mirrors from normal viewing angles
+    { d: V3.norm([-0.30, 0.40, -0.86]), hs: [0.30, 0.10], I: 3.2, c: [0.92, 0.96, 1.0] },
+    { d: V3.norm([0.62, 0.36, -0.70]), hs: [0.16, 0.08], I: 2.2, c: [1.0, 0.97, 0.92] },
+  ];
+  const f = (v) => v.map((x) => x.toFixed(6)).join(', ');
+  let lines = '';
+  for (const b of boxes) {
+    let r = V3.cross(b.d, [0, 1, 0]);
+    if (V3.len(r) < 1e-3) r = [1, 0, 0];
+    r = V3.norm(r);
+    const u = V3.norm(V3.cross(r, b.d));
+    lines += `  c += vec3<f32>(${f(b.c)}) * (${b.I.toFixed(3)} * k) * sbox(d, vec3<f32>(${f(b.d)}), vec3<f32>(${f(r)}), vec3<f32>(${f(u)}), vec2<f32>(${f(b.hs)}), rough);\n`;
+  }
+  return /* wgsl */`
+const KEYDIR = vec3<f32>(${f(KEY)});
+fn sbox(d: vec3<f32>, c: vec3<f32>, r: vec3<f32>, u: vec3<f32>, hs: vec2<f32>, rough: f32) -> f32 {
+  let cd = dot(d, c);
+  if (cd <= 0.05) { return 0.0; }
+  let p = d / cd;
+  let x = abs(dot(p, r));
+  let y = abs(dot(p, u));
+  let e = 0.012 + rough * 0.45;
+  return (1.0 - smoothstep(hs.x - e, hs.x + e, x)) * (1.0 - smoothstep(hs.y - e, hs.y + e, y)) * smoothstep(0.05, 0.25, cd);
+}
+fn envColor(d: vec3<f32>, rough: f32) -> vec3<f32> {
+  let y = d.y;
+  let horizon = vec3<f32>(0.085, 0.088, 0.092);
+  let ceil = vec3<f32>(0.035, 0.037, 0.042);
+  let flo = vec3<f32>(0.030, 0.028, 0.026);
+  var c = mix(horizon, ceil, smoothstep(0.0, 0.85, y));
+  if (y < 0.0) { c = mix(horizon * 0.9, flo, smoothstep(0.0, -0.35, y)); }
+  c += vec3<f32>(0.075, 0.080, 0.085) * pow(max(dot(d, normalize(vec3<f32>(0.0, 0.12, -1.0))), 0.0), 4.0);
+  let k = 1.0 / (1.0 + 5.0 * rough);
+${lines}  return c;
+}
+fn ambientLight(n: vec3<f32>) -> vec3<f32> {
+  return mix(vec3<f32>(0.035, 0.033, 0.031), vec3<f32>(0.20, 0.205, 0.215), clamp(n.y * 0.5 + 0.5, 0.0, 1.0))
+       + vec3<f32>(0.10, 0.11, 0.12) * max(dot(n, normalize(vec3<f32>(-1.0, 0.32, -0.42))), 0.0)
+       + vec3<f32>(0.05, 0.048, 0.045) * max(dot(n, normalize(vec3<f32>(1.0, 0.25, 0.30))), 0.0);
+}
+const KEYCOL = vec3<f32>(3.1, 3.0, 2.85);
+`;
+}
+
+const VIEW_WGSL = /* wgsl */`
+struct View {
+  viewProj: mat4x4<f32>,
+  view: mat4x4<f32>,
+  proj: mat4x4<f32>,
+  invView: mat4x4<f32>,
+  invProj: mat4x4<f32>,
+  invViewProj: mat4x4<f32>,
+  camPos: vec4<f32>,   // xyz, w = time
+  screen: vec4<f32>,   // w, h, 1/w, 1/h   (light view: res, res, causticW, causticH)
+  grid: vec4<f32>,     // world origin of grid cell (0,0,0), w = cell size
+  fluid: vec4<f32>,    // render radius, thickness factor, smoothing radius, smoothing threshold
+  light: vec4<f32>,    // xyz toward key light
+  tank: vec4<f32>,     // half x, height, half z, glass thickness
+  misc: vec4<f32>,     // focal px (or px per meter), ortho flag, exposure, base thickness
+  caus: vec4<f32>,     // caustic rect x0, z0, x1, z1
+  ortho: vec4<f32>,    // light ortho l, r, b, t
+  absorb: vec4<f32>,   // absorption rgb (1/m), foam strength
+};
+fn linDepth(d: f32, P: mat4x4<f32>) -> f32 { return P[3][2] / (d + P[2][2]); }
+fn aces(x: vec3<f32>) -> vec3<f32> {
+  return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), vec3<f32>(0.0), vec3<f32>(1.0));
+}
+fn hash21(p: vec2<f32>) -> f32 { return fract(sin(dot(p, vec2<f32>(127.1, 311.7))) * 43758.5453); }
+fn vnoise(p: vec2<f32>) -> f32 {
+  let i = floor(p); let f = fract(p);
+  let u = f * f * (3.0 - 2.0 * f);
+  return mix(mix(hash21(i), hash21(i + vec2<f32>(1.0, 0.0)), u.x), mix(hash21(i + vec2<f32>(0.0, 1.0)), hash21(i + vec2<f32>(1.0, 1.0)), u.x), u.y);
+}
+fn fullscreen(i: u32) -> vec4<f32> {
+  let x = f32((i << 1u) & 2u) * 2.0 - 1.0;
+  let y = f32(i & 2u) * 2.0 - 1.0;
+  return vec4<f32>(x, y, 0.0, 1.0);
+}
+`;
+
+// =====================================================================
+// WGSL: FLIP simulation on a staggered (MAC) grid, all in cell units
+// =====================================================================
+const SIM_WGSL = /* wgsl */`
+struct SimU {
+  cupM: mat4x4<f32>,
+  cupInv: mat4x4<f32>,
+  cupInvPrev: mat4x4<f32>,
+  cupVel: vec4<f32>,     // linear velocity (cells/s), w = active
+  cupAng: vec4<f32>,     // angular velocity (rad/s)
+  cupPivot: vec4<f32>,   // pivot (cells), w = bounding radius (cells)
+  cupShape: vec4<f32>,   // rm, wall thickness, height, unused (cells)
+  cupHandle: vec4<f32>,  // cx, cy, R, r (cells, local)
+  ball: vec4<f32>,       // center, radius (0 = inactive)
+  ballPrev: vec4<f32>,
+  ballVel: vec4<f32>,
+  p0: vec4<f32>,         // dt, gravity, flip ratio, drift
+  p1: vec4<f32>,         // rest density, SOR omega, collision margin, vmax
+  p2: vec4<u32>,         // particle count, frame
+  p3: vec4<f32>,         // foam gain, foam keep, impact threshold, time
+  tap: vec4<f32>,        // spout center (cells), stream radius (cells)
+  tap2: vec4<f32>,       // exit speed (cells/s, negative = down), particles per substep, active, seed
+};
+
+override NX: i32 = 60;
+override NY: i32 = 34;
+override NZ: i32 = 36;
+override COLOR: i32 = 0;
+override NXN: i32 = NX + 1;
+override NYN: i32 = NY + 1;
+override NZN: i32 = NZ + 1;
+override NNODES: i32 = NXN * NYN * NZN;
+override NCELLS: i32 = NX * NY * NZ;
+override DOFF: i32 = NNODES * 6;
+override SOFF: i32 = DOFF + NCELLS * 2;
+
+const SCALE: f32 = 65536.0;
+const INV_SCALE: f32 = 1.0 / 65536.0;
+
+@group(0) @binding(0) var<uniform> U: SimU;
+@group(0) @binding(1) var<storage, read_write> pos: array<vec4<f32>>;
+@group(0) @binding(2) var<storage, read_write> vel: array<vec4<f32>>;
+@group(0) @binding(3) var<storage, read_write> acc: array<atomic<i32>>;
+@group(0) @binding(4) var<storage, read_write> gvel: array<vec4<f32>>;
+@group(0) @binding(5) var<storage, read_write> gold: array<vec4<f32>>;
+@group(0) @binding(6) var<storage, read_write> cellF: array<vec4<f32>>; // rhs, nOpen, density, type
+@group(0) @binding(7) var<storage, read_write> press: array<f32>;
+@group(0) @binding(8) var<storage, read_write> surf: array<atomic<u32>>; // [0..3] indirect draw args, then visible particle ids
+
+fn nid(i: i32, j: i32, k: i32) -> i32 { return (k * NYN + j) * NXN + i; }
+fn cid(i: i32, j: i32, k: i32) -> i32 { return (k * NY + j) * NX + i; }
+
+// ---- mug signed distance (local frame: origin at bottom center, y up) ----
+fn sdSeg(q: vec2<f32>, a: vec2<f32>, b: vec2<f32>) -> f32 {
+  let pa = q - a; let ba = b - a;
+  let h = clamp(dot(pa, ba) / dot(ba, ba), 0.0, 1.0);
+  return length(pa - ba * h);
+}
+fn cupBody(l: vec3<f32>) -> f32 {
+  let rm = U.cupShape.x; let t = U.cupShape.y; let H = U.cupShape.z;
+  let q = vec2<f32>(length(l.xz), l.y);
+  let dw = sdSeg(q, vec2<f32>(rm, t * 0.5), vec2<f32>(rm, H - t * 0.5)) - t * 0.5;
+  let db = sdSeg(q, vec2<f32>(0.0, t * 0.5), vec2<f32>(rm, t * 0.5)) - t * 0.5;
+  return min(dw, db);
+}
+fn cupHandleSdf(l: vec3<f32>) -> f32 {
+  let d = l.xy - U.cupHandle.xy;
+  let q = vec2<f32>(length(d) - U.cupHandle.z, l.z);
+  return max(length(q) - U.cupHandle.w, U.cupShape.x - length(l.xz));
+}
+fn cupSdf(l: vec3<f32>) -> f32 { return min(cupBody(l), cupHandleSdf(l)); }
+fn cupGrad(l: vec3<f32>) -> vec3<f32> {
+  let e = 0.04;
+  let a = vec3<f32>(1.0, -1.0, -1.0); let b = vec3<f32>(-1.0, -1.0, 1.0);
+  let c = vec3<f32>(-1.0, 1.0, -1.0); let d = vec3<f32>(1.0, 1.0, 1.0);
+  let g = a * cupSdf(l + a * e) + b * cupSdf(l + b * e) + c * cupSdf(l + c * e) + d * cupSdf(l + d * e);
+  return g / max(length(g), 1e-6);
+}
+
+// ---------------------------------------------------------------------
+// Particle -> grid: trilinear splats of momentum and weight on the three
+// staggered face grids, plus particle density at cell centers.
+// ---------------------------------------------------------------------
+fn splatC(comp: i32, gp: vec3<f32>, hi: vec3<f32>, val: f32) {
+  let q = clamp(gp, vec3<f32>(0.0), hi);
+  let b = vec3<i32>(floor(q));
+  let f = q - vec3<f32>(b);
+  for (var dz = 0; dz < 2; dz++) {
+    let wz = select(1.0 - f.z, f.z, dz == 1);
+    for (var dy = 0; dy < 2; dy++) {
+      let wy = select(1.0 - f.y, f.y, dy == 1) * wz;
+      for (var dx = 0; dx < 2; dx++) {
+        let w = select(1.0 - f.x, f.x, dx == 1) * wy;
+        let n = nid(b.x + dx, b.y + dy, b.z + dz) * 6;
+        atomicAdd(&acc[n + comp], i32(w * val * SCALE));
+        atomicAdd(&acc[n + 3 + comp], i32(w * SCALE));
+      }
+    }
+  }
+}
+
+@compute @workgroup_size(64)
+fn p2g(@builtin(global_invocation_id) gid: vec3<u32>) {
+  let id = gid.x;
+  if (id >= U.p2.x) { return; }
+  let p = pos[id].xyz;
+  let v = vel[id].xyz;
+  let fx = f32(NX); let fy = f32(NY); let fz = f32(NZ);
+  let e = 1e-3;
+  splatC(0, vec3<f32>(p.x, p.y - 0.5, p.z - 0.5), vec3<f32>(fx - e, fy - 1.0 - e, fz - 1.0 - e), v.x);
+  splatC(1, vec3<f32>(p.x - 0.5, p.y, p.z - 0.5), vec3<f32>(fx - 1.0 - e, fy - e, fz - 1.0 - e), v.y);
+  splatC(2, vec3<f32>(p.x - 0.5, p.y - 0.5, p.z), vec3<f32>(fx - 1.0 - e, fy - 1.0 - e, fz - e), v.z);
+  let q = clamp(p - 0.5, vec3<f32>(0.0), vec3<f32>(fx - 1.0 - e, fy - 1.0 - e, fz - 1.0 - e));
+  let b = vec3<i32>(floor(q));
+  let f = q - vec3<f32>(b);
+  for (var dz = 0; dz < 2; dz++) {
+    let wz = select(1.0 - f.z, f.z, dz == 1);
+    for (var dy = 0; dy < 2; dy++) {
+      let wy = select(1.0 - f.y, f.y, dy == 1) * wz;
+      for (var dx = 0; dx < 2; dx++) {
+        let w = select(1.0 - f.x, f.x, dx == 1) * wy;
+        atomicAdd(&acc[DOFF + cid(b.x + dx, b.y + dy, b.z + dz) * 2], i32(w * SCALE));
+      }
+    }
+  }
+  let c = vec3<i32>(clamp(floor(p), vec3<f32>(0.0), vec3<f32>(fx - 1.0, fy - 1.0, fz - 1.0)));
+  atomicMax(&acc[DOFF + cid(c.x, c.y, c.z) * 2 + 1], 1);
+}
+
+// ---------------------------------------------------------------------
+// Classify cells: air / fluid / moving solids. Clears the density accumulators.
+// ---------------------------------------------------------------------
+@compute @workgroup_size(64)
+fn cellUpdate(@builtin(global_invocation_id) gid: vec3<u32>) {
+  let c = i32(gid.x);
+  if (c >= NCELLS) { return; }
+  if (c == 0) { atomicStore(&acc[SOFF + 8], 0); }
+  let i = c % NX; let j = (c / NX) % NY; let k = c / (NX * NY);
+  let dens = f32(atomicExchange(&acc[DOFF + c * 2], 0)) * INV_SCALE;
+  let flag = atomicExchange(&acc[DOFF + c * 2 + 1], 0);
+  let x = vec3<f32>(f32(i), f32(j), f32(k)) + 0.5;
+  // a cell holding a lone stray particle is spray, not water: let it fly instead of being propped up by pressure
+  var t = select(0.0, 1.0, flag > 0 && dens > 1.1);
+  if (U.cupVel.w > 0.5) {
+    let l = (U.cupInv * vec4<f32>(x, 1.0)).xyz;
+    if (cupBody(l) < 0.0) { t = 3.0; }
+  }
+  if (U.ball.w > 0.0) {
+    if (length(x - U.ball.xyz) < U.ball.w) { t = 4.0; }
+  }
+  cellF[c] = vec4<f32>(0.0, 0.0, dens, t);
+  if (t != 1.0) { press[c] = 0.0; }
+}
+
+fn ctype(i: i32, j: i32, k: i32) -> f32 {
+  if (i < 0 || i >= NX || j < 0 || k < 0 || k >= NZ) { return 2.0; }
+  if (j >= NY) { return 0.0; }
+  return cellF[cid(i, j, k)].w;
+}
+fn solidVel(t: f32, x: vec3<f32>) -> vec3<f32> {
+  if (t > 3.5) { return U.ballVel.xyz; }
+  if (t > 2.5) { return U.cupVel.xyz + cross(U.cupAng.xyz, x - U.cupPivot.xyz); }
+  return vec3<f32>(0.0);
+}
+
+// ---------------------------------------------------------------------
+// Normalize face velocities, keep a copy for FLIP, add gravity, apply solid BCs.
+// ---------------------------------------------------------------------
+@compute @workgroup_size(64)
+fn gridUpdate(@builtin(global_invocation_id) gid: vec3<u32>) {
+  let n = i32(gid.x);
+  if (n >= NNODES) { return; }
+  let i = n % NXN; let j = (n / NXN) % NYN; let k = n / (NXN * NYN);
+  var v = vec3<f32>(0.0);
+  for (var c = 0; c < 3; c++) {
+    let m = atomicExchange(&acc[n * 6 + c], 0);
+    let w = atomicExchange(&acc[n * 6 + 3 + c], 0);
+    if (w > 0) { v[c] = f32(m) / f32(w); }
+  }
+  gold[n] = vec4<f32>(v, 0.0);
+  v.y += U.p0.y * U.p0.x;
+  let fi = f32(i); let fj = f32(j); let fk = f32(k);
+  if (j < NY && k < NZ) {
+    let t = max(ctype(i - 1, j, k), ctype(i, j, k));
+    if (t > 1.5) { v.x = solidVel(t, vec3<f32>(fi, fj + 0.5, fk + 0.5)).x; }
+  } else { v.x = 0.0; }
+  if (i < NX && k < NZ) {
+    let t = max(ctype(i, j - 1, k), ctype(i, j, k));
+    if (t > 1.5) { v.y = solidVel(t, vec3<f32>(fi + 0.5, fj, fk + 0.5)).y; }
+  } else { v.y = 0.0; }
+  if (i < NX && j < NY) {
+    let t = max(ctype(i, j, k - 1), ctype(i, j, k));
+    if (t > 1.5) { v.z = solidVel(t, vec3<f32>(fi + 0.5, fj + 0.5, fk)).z; }
+  } else { v.z = 0.0; }
+  gvel[n] = vec4<f32>(v, 0.0);
+}
+
+// ---------------------------------------------------------------------
+// Pressure right-hand side: -divergence + volume-drift correction.
+// ---------------------------------------------------------------------
+fn openf(t: f32) -> f32 { return select(1.0, 0.0, t > 1.5); }
+@compute @workgroup_size(64)
+fn computeRhs(@builtin(global_invocation_id) gid: vec3<u32>) {
+  let c = i32(gid.x);
+  if (c >= NCELLS) { return; }
+  var cf = cellF[c];
+  if (cf.w != 1.0) { return; }
+  let i = c % NX; let j = (c / NX) % NY; let k = c / (NX * NY);
+  let v0 = gvel[nid(i, j, k)].xyz;
+  let div = gvel[nid(i + 1, j, k)].x - v0.x + gvel[nid(i, j + 1, k)].y - v0.y + gvel[nid(i, j, k + 1)].z - v0.z;
+  let nOpen = openf(ctype(i - 1, j, k)) + openf(ctype(i + 1, j, k)) + openf(ctype(i, j - 1, k))
+            + openf(ctype(i, j + 1, k)) + openf(ctype(i, j, k - 1)) + openf(ctype(i, j, k + 1));
+  let comp = cf.z / U.p1.x - 1.0;
+  let tgt = select(0.0, min(U.p0.w * comp / U.p0.x, 40.0), comp > 0.0);
+  cf.x = tgt - div;
+  cf.y = nOpen;
+  cellF[c] = cf;
+}
+
+// ---------------------------------------------------------------------
+// Red-black Gauss-Seidel with over-relaxation, warm started from last step.
+// ---------------------------------------------------------------------
+@compute @workgroup_size(64)
+fn rbgs(@builtin(global_invocation_id) gid: vec3<u32>) {
+  let t = i32(gid.x);
+  let NXH = NX / 2;
+  if (t >= NXH * NY * NZ) { return; }
+  let ih = t % NXH; let j = (t / NXH) % NY; let k = t / (NXH * NY);
+  let i = ih * 2 + ((j + k + COLOR) & 1);
+  let c = cid(i, j, k);
+  let cf = cellF[c];
+  if (cf.w != 1.0 || cf.y < 0.5) { return; }
+  var s = cf.x;
+  if (i > 0) { s += press[c - 1]; }
+  if (i < NX - 1) { s += press[c + 1]; }
+  if (j > 0) { s += press[c - NX]; }
+  if (j < NY - 1) { s += press[c + NX]; }
+  if (k > 0) { s += press[c - NX * NY]; }
+  if (k < NZ - 1) { s += press[c + NX * NY]; }
+  let old = press[c];
+  press[c] = old + U.p1.y * (s / cf.y - old);
+}
+
+// ---------------------------------------------------------------------
+// Subtract pressure gradient on faces between non-solid cells.
+// ---------------------------------------------------------------------
+@compute @workgroup_size(64)
+fn project(@builtin(global_invocation_id) gid: vec3<u32>) {
+  let n = i32(gid.x);
+  if (n >= NNODES) { return; }
+  let i = n % NXN; let j = (n / NXN) % NYN; let k = n / (NXN * NYN);
+  var v = gvel[n].xyz;
+  if (j < NY && k < NZ && i > 0 && i < NX) {
+    let a = cid(i - 1, j, k); let b = cid(i, j, k);
+    let t = max(cellF[a].w, cellF[b].w);
+    if (t > 0.5 && t < 1.5) { v.x -= press[b] - press[a]; }
+  }
+  if (i < NX && k < NZ && j > 0) {
+    let a = cid(i, j - 1, k);
+    var tb = 0.0; var pb = 0.0;
+    if (j < NY) { let b = cid(i, j, k); tb = cellF[b].w; pb = press[b]; }
+    let t = max(cellF[a].w, tb);
+    if (t > 0.5 && t < 1.5) { v.y -= pb - press[a]; }
+  }
+  if (i < NX && j < NY && k > 0 && k < NZ) {
+    let a = cid(i, j, k - 1); let b = cid(i, j, k);
+    let t = max(cellF[a].w, cellF[b].w);
+    if (t > 0.5 && t < 1.5) { v.z -= press[b] - press[a]; }
+  }
+  gvel[n] = vec4<f32>(v, 0.0);
+}
+
+// ---------------------------------------------------------------------
+// Grid -> particle (FLIP/PIC blend), RK2 advection, collisions, foam.
+// ---------------------------------------------------------------------
+fn interp2(comp: i32, gp: vec3<f32>, hi: vec3<f32>) -> vec2<f32> {
+  let q = clamp(gp, vec3<f32>(0.0), hi);
+  let b = vec3<i32>(floor(q));
+  let f = q - vec3<f32>(b);
+  var r = vec2<f32>(0.0);
+  for (var dz = 0; dz < 2; dz++) {
+    let wz = select(1.0 - f.z, f.z, dz == 1);
+    for (var dy = 0; dy < 2; dy++) {
+      let wy = select(1.0 - f.y, f.y, dy == 1) * wz;
+      for (var dx = 0; dx < 2; dx++) {
+        let w = select(1.0 - f.x, f.x, dx == 1) * wy;
+        let n = nid(b.x + dx, b.y + dy, b.z + dz);
+        r += w * vec2<f32>(gvel[n][comp], gold[n][comp]);
+      }
+    }
+  }
+  return r;
+}
+fn interp1(comp: i32, gp: vec3<f32>, hi: vec3<f32>) -> f32 {
+  let q = clamp(gp, vec3<f32>(0.0), hi);
+  let b = vec3<i32>(floor(q));
+  let f = q - vec3<f32>(b);
+  var r = 0.0;
+  for (var dz = 0; dz < 2; dz++) {
+    let wz = select(1.0 - f.z, f.z, dz == 1);
+    for (var dy = 0; dy < 2; dy++) {
+      let wy = select(1.0 - f.y, f.y, dy == 1) * wz;
+      for (var dx = 0; dx < 2; dx++) {
+        let w = select(1.0 - f.x, f.x, dx == 1) * wy;
+        r += w * gvel[nid(b.x + dx, b.y + dy, b.z + dz)][comp];
+      }
+    }
+  }
+  return r;
+}
+
+var<workgroup> wgs: array<atomic<i32>, 4>;
+var<workgroup> wgSurfCount: atomic<u32>;
+var<workgroup> wgSurfBase: u32;
+
+// A particle can only be seen if it touches air, a glass wall, or sits in thin water.
+fn exposedAt(x: vec3<f32>) -> bool {
+  let c = vec3<i32>(clamp(floor(x), vec3<f32>(0.0), vec3<f32>(f32(NX) - 1.0, f32(NY) - 1.0, f32(NZ) - 1.0)));
+  let own = cellF[cid(c.x, c.y, c.z)];
+  if (own.z < 3.0) { return true; }
+  var dirs = array<vec3<i32>, 6>(vec3<i32>(1, 0, 0), vec3<i32>(-1, 0, 0), vec3<i32>(0, 1, 0), vec3<i32>(0, -1, 0), vec3<i32>(0, 0, 1), vec3<i32>(0, 0, -1));
+  for (var d = 0; d < 6; d++) {
+    let n = c + dirs[d];
+    if (n.y < 0) { continue; } // the tank floor is never seen from outside
+    if (n.x < 0 || n.x >= NX || n.z < 0 || n.z >= NZ || n.y >= NY) { return true; }
+    let f = cellF[cid(n.x, n.y, n.z)];
+    if (f.w < 0.5 || (f.w < 1.5 && f.z < 2.5)) { return true; }
+  }
+  return false;
+}
+
+@compute @workgroup_size(64)
+fn g2p(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_invocation_index) lid: u32) {
+  let id = gid.x;
+  var exposed = false;
+  var slot = 0u;
+  if (id < U.p2.x) {
+    let P = pos[id];
+    let p = P.xyz;
+    let vp = vel[id].xyz;
+    let dt = U.p0.x;
+    let fx = f32(NX); let fy = f32(NY); let fz = f32(NZ);
+    let e = 1e-3;
+    let hiU = vec3<f32>(fx - e, fy - 1.0 - e, fz - 1.0 - e);
+    let hiV = vec3<f32>(fx - 1.0 - e, fy - e, fz - 1.0 - e);
+    let hiW = vec3<f32>(fx - 1.0 - e, fy - 1.0 - e, fz - e);
+    let iu = interp2(0, vec3<f32>(p.x, p.y - 0.5, p.z - 0.5), hiU);
+    let iv = interp2(1, vec3<f32>(p.x - 0.5, p.y, p.z - 0.5), hiV);
+    let iw = interp2(2, vec3<f32>(p.x - 0.5, p.y - 0.5, p.z), hiW);
+    let vg = vec3<f32>(iu.x, iv.x, iw.x);
+    let vo = vec3<f32>(iu.y, iv.y, iw.y);
+    var v = mix(vg, vp + (vg - vo), U.p0.z);
+
+    // RK2 through the divergence-free grid field
+    let pm = p + vg * (0.5 * dt);
+    let vm = vec3<f32>(
+      interp1(0, vec3<f32>(pm.x, pm.y - 0.5, pm.z - 0.5), hiU),
+      interp1(1, vec3<f32>(pm.x - 0.5, pm.y, pm.z - 0.5), hiV),
+      interp1(2, vec3<f32>(pm.x - 0.5, pm.y - 0.5, pm.z), hiW));
+    var x = p + vm * dt;
+    var p0 = p;
+    let margin = U.p1.z;
+    var fresh = false;
+
+    // ---- tap: recycle a few particles from the floor layer out of the spout ----
+    if (U.tap2.z > 0.5 && x.y < 1.1 && (id & 15u) == (U.p2.y & 15u)) {
+      let kk = atomicAdd(&acc[SOFF + 8], 1);
+      if (f32(kk) < U.tap2.y) {
+        let fk = f32(kk) + 0.5;
+        let rr = sqrt(fk / U.tap2.y) * U.tap.w;
+        let ang = fk * 2.39996 + U.tap2.w * 6.2831;
+        x = U.tap.xyz + vec3<f32>(cos(ang) * rr, U.tap2.x * dt * fract(fk * 0.618 + U.tap2.w), sin(ang) * rr);
+        v = vec3<f32>(0.0, U.tap2.x, 0.0);
+        p0 = x;
+        fresh = true;
+      }
+    }
+
+    // ---- mug: sub-stepped collision in the mug's own frame ----
+    if (U.cupVel.w > 0.5) {
+      let l0 = (U.cupInvPrev * vec4<f32>(p0, 1.0)).xyz;
+      let l1 = (U.cupInv * vec4<f32>(x, 1.0)).xyz;
+      let cc = vec3<f32>(0.0, U.cupShape.z * 0.5, 0.0);
+      let delta = l1 - l0;
+      if (min(length(l0 - cc), length(l1 - cc)) < U.cupPivot.w + margin + 1.0) {
+        let nsteps = i32(clamp(ceil(length(delta) / 0.3), 1.0, 8.0));
+        let stepv = delta / f32(nsteps);
+        var l = l0;
+        var hit = false;
+        var nl = vec3<f32>(0.0, 1.0, 0.0);
+        for (var s = 0; s < nsteps; s++) {
+          l += stepv;
+          let d = cupSdf(l);
+          if (d < margin) {
+            let g = cupGrad(l);
+            l += g * (margin - d);
+            hit = true; nl = g;
+          }
+        }
+        if (hit) {
+          x = (U.cupM * vec4<f32>(l, 1.0)).xyz;
+          let nw = normalize((U.cupM * vec4<f32>(nl, 0.0)).xyz);
+          let vs = U.cupVel.xyz + cross(U.cupAng.xyz, x - U.cupPivot.xyz);
+          var vr = v - vs;
+          let vn = dot(vr, nw);
+          if (vn < 0.0) { vr -= vn * nw; }
+          v = vs + vr;
+        }
+      }
+      // count particles held in the mug's cavity
+      let lc = (U.cupInv * vec4<f32>(x, 1.0)).xyz;
+      let ri = U.cupShape.x - U.cupShape.y * 0.5;
+      if (length(lc.xz) < ri && lc.y > U.cupShape.y && lc.y < U.cupShape.z) { atomicAdd(&wgs[1], 1); }
+    }
+
+    // ---- ball ----
+    if (U.ball.w > 0.0) {
+      let r0 = p0 - U.ballPrev.xyz;
+      let r1 = x - U.ball.xyz;
+      let R = U.ball.w + margin;
+      if (min(length(r0), length(r1)) < R + 2.0 + length(r1 - r0)) {
+        let delta = r1 - r0;
+        let nsteps = i32(clamp(ceil(length(delta) / 0.3), 1.0, 8.0));
+        let stepv = delta / f32(nsteps);
+        var r = r0;
+        var hit = false;
+        for (var s = 0; s < nsteps; s++) {
+          r += stepv;
+          let d = length(r);
+          if (d < R) { r = r / max(d, 1e-5) * R; hit = true; }
+        }
+        if (hit) {
+          x = U.ball.xyz + r;
+          let nw = normalize(r);
+          var vr = v - U.ballVel.xyz;
+          let vn = dot(vr, nw);
+          if (vn < 0.0) { vr -= vn * nw; }
+          v = U.ballVel.xyz + vr;
+        }
+      }
+    }
+
+    // ---- tank walls ----
+    let lo = vec3<f32>(margin);
+    let hi = vec3<f32>(fx, fy, fz) - margin;
+    if (x.x < lo.x) { x.x = lo.x; v.x = max(v.x, 0.0); }
+    if (x.x > hi.x) { x.x = hi.x; v.x = min(v.x, 0.0); }
+    if (x.y < lo.y) { x.y = lo.y; v.y = max(v.y, 0.0); }
+    if (x.y > hi.y) { x.y = hi.y; v.y = min(v.y, 0.0); }
+    if (x.z < lo.z) { x.z = lo.z; v.z = max(v.z, 0.0); }
+    if (x.z > hi.z) { x.z = hi.z; v.z = min(v.z, 0.0); }
+    let sp = length(v);
+    if (sp > U.p1.w) { v *= U.p1.w / sp; }
+
+    // ---- aeration: sudden non-gravitational acceleration whips up foam ----
+    let accel = select(length(v - vp - vec3<f32>(0.0, U.p0.y * dt, 0.0)) / dt, 0.0, fresh);
+    let gen = clamp((accel - U.p3.z) / (U.p3.z * 2.5), 0.0, 1.0);
+    var foam = min(P.w * U.p3.y + gen * U.p3.x, 1.0);
+    if (fresh) { foam = 0.0; }
+    if (gen > 0.0 && !fresh) { atomicAdd(&wgs[0], i32(gen * 1000.0)); }
+    if (sp > 60.0) { atomicAdd(&wgs[2], 1); }
+
+    pos[id] = vec4<f32>(x, foam);
+    vel[id] = vec4<f32>(v, 0.0);
+    if (U.p2.z == 1u) {
+      exposed = exposedAt(x);
+      if (exposed) { slot = atomicAdd(&wgSurfCount, 1u); }
+    }
+  }
+  workgroupBarrier();
+  if (lid < 4u) {
+    let s = atomicLoad(&wgs[lid]);
+    if (s != 0) { atomicAdd(&acc[SOFF + i32(lid)], s); }
+  }
+  if (lid == 0u) {
+    let n = atomicLoad(&wgSurfCount);
+    var b = 0u;
+    if (n > 0u) { b = atomicAdd(&surf[1], n); }
+    wgSurfBase = b;
+  }
+  workgroupBarrier();
+  if (exposed) { atomicStore(&surf[4u + wgSurfBase + slot], id); }
+}
+`;
+
+// =====================================================================
+// WGSL: particle splatting (surface depth, thickness)
+// =====================================================================
+const PARTICLE_WGSL = VIEW_WGSL + /* wgsl */`
+@group(0) @binding(0) var<uniform> V: View;
+@group(0) @binding(1) var<storage, read> P: array<vec4<f32>>;
+@group(0) @binding(3) var<storage, read> surfIds: array<u32>;
+
+struct POut {
+  @builtin(position) pos: vec4<f32>,
+  @location(0) uv: vec2<f32>,
+  @location(1) vz: f32,
+  @location(2) foam: f32,
+};
+
+fn hexCorner(i: u32) -> vec2<f32> {
+  var h = array<vec2<f32>, 12>(
+    vec2<f32>(1.0, 0.0), vec2<f32>(0.5, 0.8660254), vec2<f32>(-0.5, 0.8660254),
+    vec2<f32>(1.0, 0.0), vec2<f32>(-0.5, 0.8660254), vec2<f32>(-1.0, 0.0),
+    vec2<f32>(1.0, 0.0), vec2<f32>(-1.0, 0.0), vec2<f32>(-0.5, -0.8660254),
+    vec2<f32>(1.0, 0.0), vec2<f32>(-0.5, -0.8660254), vec2<f32>(0.5, -0.8660254));
+  return h[i];
+}
+
+// Opaque hexagon impostors without discard or frag_depth, so hidden-surface
+// removal and early depth rejection stay effective on tile-based GPUs.
+@vertex fn vsDepth(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> POut {
+  let p = P[surfIds[4u + ii]];
+  let wp = V.grid.xyz + p.xyz * V.grid.w;
+  let vp = (V.view * vec4<f32>(wp, 1.0)).xyz;
+  let c = hexCorner(vi);
+  let r = V.fluid.x;
+  var o: POut;
+  o.pos = V.proj * vec4<f32>(vp.xy + c * r, vp.z + r, 1.0);
+  o.uv = c; o.vz = vp.z; o.foam = p.w;
+  return o;
+}
+@fragment fn fsDepth(i: POut) -> @location(0) f32 {
+  let nz = sqrt(max(1.0 - dot(i.uv, i.uv), 0.0));
+  return -i.vz - nz * V.fluid.x;
+}
+`;
+
+const THICK_WGSL = PARTICLE_WGSL + /* wgsl */`
+@group(0) @binding(2) var sceneDepth: texture_depth_2d;
+@vertex fn vsThick(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> POut {
+  var q = array<vec2<f32>, 6>(vec2<f32>(-1.0, -1.0), vec2<f32>(1.0, -1.0), vec2<f32>(1.0, 1.0),
+                              vec2<f32>(-1.0, -1.0), vec2<f32>(1.0, 1.0), vec2<f32>(-1.0, 1.0));
+  let p = P[ii];
+  let wp = V.grid.xyz + p.xyz * V.grid.w;
+  let vp = (V.view * vec4<f32>(wp, 1.0)).xyz;
+  let c = q[vi];
+  let r = V.fluid.x * 1.25;
+  var o: POut;
+  o.pos = V.proj * vec4<f32>(vp.xy + c * r, vp.z, 1.0);
+  o.uv = c; o.vz = vp.z; o.foam = p.w;
+  return o;
+}
+@fragment fn fsThick(i: POut) -> @location(0) vec4<f32> {
+  let d2 = dot(i.uv, i.uv);
+  if (d2 > 1.0) { discard; }
+  let dims = vec2<i32>(textureDimensions(sceneDepth));
+  let sp = min(vec2<i32>(i.pos.xy * 2.0), dims - vec2<i32>(1));
+  let sceneZ = linDepth(textureLoad(sceneDepth, sp, 0), V.proj);
+  let r = V.fluid.x * 1.25;
+  let nz = sqrt(1.0 - d2);
+  if (-i.vz - nz * r > sceneZ) { discard; }
+  let th = 2.0 * nz * r * V.fluid.y;
+  return vec4<f32>(th, th * i.foam, 0.0, 0.0);
+}
+`;
+
+// =====================================================================
+// WGSL: depth smoothing (narrow-range style bilateral, separable)
+// =====================================================================
+const SMOOTH_WGSL = VIEW_WGSL + /* wgsl */`
+@group(0) @binding(0) var<uniform> V: View;
+@group(0) @binding(1) var src: texture_2d<f32>;
+override DIRX: i32 = 1;
+override DIRY: i32 = 0;
+@vertex fn vsFull(@builtin(vertex_index) i: u32) -> @builtin(position) vec4<f32> { return fullscreen(i); }
+@fragment fn fsSmooth(@builtin(position) fc: vec4<f32>) -> @location(0) f32 {
+  let p = vec2<i32>(fc.xy);
+  let z = textureLoad(src, p, 0).r;
+  if (z <= 0.0) { return z; }
+  let dims = vec2<i32>(textureDimensions(src));
+  let hi = dims - vec2<i32>(1);
+  var rpx = V.fluid.z * V.misc.x;
+  if (V.misc.y < 0.5) { rpx = rpx / z; }
+  rpx = clamp(rpx, 1.0, 32.0);
+  let thr = V.fluid.w;
+  let dir = vec2<i32>(DIRX, DIRY);
+  // local slope along this axis, so a tilted plane is treated as flat (no bias toward the camera)
+  let k = max(1, i32(round(rpx * 0.5)));
+  let za = textureLoad(src, clamp(p + dir * k, vec2<i32>(0), hi), 0).r;
+  let zb = textureLoad(src, clamp(p - dir * k, vec2<i32>(0), hi), 0).r;
+  let okA = za > 0.0 && abs(za - z) < thr * 3.0 + f32(k) * z * 0.02;
+  let okB = zb > 0.0 && abs(zb - z) < thr * 3.0 + f32(k) * z * 0.02;
+  var slope = 0.0;
+  if (okA && okB) { slope = (za - zb) / f32(2 * k); }
+  else if (okA) { slope = (za - z) / f32(k); }
+  else if (okB) { slope = (z - zb) / f32(k); }
+  let sigma = max(rpx * 0.5, 0.5);
+  let inv2s2 = 1.0 / (2.0 * sigma * sigma);
+  let invr = 1.0 / (thr * thr);
+  let stepf = max(1.0, rpx / 12.0);
+  var sum = 0.0;
+  var ws = 1.0;
+  for (var t = 1; t <= 12; t++) {
+    let o = f32(t) * stepf;
+    if (o > rpx + 0.5) { break; }
+    let oi = i32(round(o));
+    let w = exp(-o * o * inv2s2);
+    let z1 = textureLoad(src, clamp(p + dir * oi, vec2<i32>(0), hi), 0).r;
+    let z2 = textureLoad(src, clamp(p - dir * oi, vec2<i32>(0), hi), 0).r;
+    if (z1 > 0.0) {
+      let r = z1 - z - slope * f32(oi);
+      if (abs(r) < thr * 2.5) { let ww = w * exp(-r * r * invr); sum += r * ww; ws += ww; }
+    }
+    if (z2 > 0.0) {
+      let r = z2 - z + slope * f32(oi);
+      if (abs(r) < thr * 2.5) { let ww = w * exp(-r * r * invr); sum += r * ww; ws += ww; }
+    }
+  }
+  return z + sum / ws;
+}
+`;
+
+// =====================================================================
+// WGSL: water shading composite
+// =====================================================================
+const COMPOSITE_WGSL = VIEW_WGSL + envWGSL() + /* wgsl */`
+@group(0) @binding(0) var<uniform> V: View;
+@group(0) @binding(1) var sceneTex: texture_2d<f32>;
+@group(0) @binding(2) var depthTex: texture_2d<f32>;
+@group(0) @binding(3) var thickTex: texture_2d<f32>;
+@group(0) @binding(4) var samp: sampler;
+
+fn vpos(p: vec2<i32>, z: f32) -> vec3<f32> {
+  let uv = (vec2<f32>(p) + 0.5) * V.screen.zw;
+  let ndc = vec2<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
+  return vec3<f32>(ndc.x * z / V.proj[0][0], ndc.y * z / V.proj[1][1], -z);
+}
+@vertex fn vsFull(@builtin(vertex_index) i: u32) -> @builtin(position) vec4<f32> { return fullscreen(i); }
+@fragment fn fsComposite(@builtin(position) fc: vec4<f32>) -> @location(0) vec4<f32> {
+  let p = vec2<i32>(fc.xy);
+  let dims = vec2<i32>(textureDimensions(depthTex));
+  let scene = textureLoad(sceneTex, p, 0);
+  let z = textureLoad(depthTex, p, 0).r;
+  if (abs(V.ortho.x - 6.0) < 0.5) { return vec4<f32>(scene.rgb, 1.0); }
+  if (z <= 0.0 || z > scene.a + 0.004) { return vec4<f32>(scene.rgb, 1.0); }
+
+  let P0 = vpos(p, z);
+  // central differences over two pixels; fall back to one side only across a real depth break
+  let jump = V.fluid.w * 3.0;
+  var dx = vec3<f32>(1e-4, 0.0, 0.0);
+  var dy = vec3<f32>(0.0, -1e-4, 0.0);
+  for (var axis = 0; axis < 2; axis++) {
+    let d = select(vec2<i32>(0, 2), vec2<i32>(2, 0), axis == 0);
+    let pa = clamp(p + d, vec2<i32>(0), dims - vec2<i32>(1));
+    let pb = clamp(p - d, vec2<i32>(0), dims - vec2<i32>(1));
+    let za = textureLoad(depthTex, pa, 0).r;
+    let zb = textureLoad(depthTex, pb, 0).r;
+    let okA = za > 0.0 && abs(za - z) < jump;
+    let okB = zb > 0.0 && abs(zb - z) < jump;
+    var g = select(vec3<f32>(0.0, -1e-4, 0.0), vec3<f32>(1e-4, 0.0, 0.0), axis == 0);
+    if (okA && okB) { g = (vpos(pa, za) - vpos(pb, zb)) * 0.5; }
+    else if (okA) { g = vpos(pa, za) - P0; }
+    else if (okB) { g = P0 - vpos(pb, zb); }
+    if (axis == 0) { dx = g; } else { dy = g; }
+  }
+  var nv = normalize(cross(dx, dy));
+  if (dot(nv, -P0) < 0.0) { nv = -nv; }
+  let N = normalize((V.invView * vec4<f32>(nv, 0.0)).xyz);
+  let wp = (V.invView * vec4<f32>(P0, 1.0)).xyz;
+  let Vd = normalize(V.camPos.xyz - wp);
+
+  let uv = fc.xy * V.screen.zw;
+  let th = textureSampleLevel(thickTex, samp, uv, 0.0).rg;
+  let thick = max(th.x, 0.0);
+  let foam = clamp(th.y / max(th.x, 1e-4), 0.0, 1.0) * V.absorb.w;
+
+  let NdV = clamp(dot(N, Vd), 0.0, 1.0);
+  let F = 0.02 + 0.98 * pow(1.0 - NdV, 5.0);
+  let R = reflect(-Vd, N);
+  var refl = envColor(R, 0.0);
+  if (R.y < 0.0) { refl = mix(refl, vec3<f32>(0.18, 0.17, 0.16), smoothstep(0.0, -0.3, R.y)); }
+  // short screen-space reflection march: picks up the mug, ball and tap above the water
+  if (R.y > 0.02) {
+    let Rv = normalize((V.view * vec4<f32>(R, 0.0)).xyz);
+    var t = 0.006;
+    var prevT = 0.0;
+    for (var i = 0; i < 22; i++) {
+      let pv = P0 + Rv * t;
+      if (pv.z > -0.03) { break; }
+      let cp = V.proj * vec4<f32>(pv, 1.0);
+      let suv = (cp.xy / cp.w) * vec2<f32>(0.5, -0.5) + 0.5;
+      if (any(suv < vec2<f32>(0.0)) || any(suv > vec2<f32>(1.0))) { break; }
+      let sp = vec2<i32>(suv * vec2<f32>(dims));
+      let sd = textureLoad(sceneTex, sp, 0).a;
+      let rd = -pv.z;
+      if (rd > sd && rd < sd + 0.035) {
+        // refine between the last miss and this hit
+        var lo = prevT; var hi = t;
+        for (var k = 0; k < 4; k++) {
+          let mid = 0.5 * (lo + hi);
+          let pm = P0 + Rv * mid;
+          let cm = V.proj * vec4<f32>(pm, 1.0);
+          let um = (cm.xy / cm.w) * vec2<f32>(0.5, -0.5) + 0.5;
+          if (-pm.z > textureLoad(sceneTex, vec2<i32>(um * vec2<f32>(dims)), 0).a) { hi = mid; } else { lo = mid; }
+        }
+        let ph = P0 + Rv * hi;
+        let ch = V.proj * vec4<f32>(ph, 1.0);
+        let uh = (ch.xy / ch.w) * vec2<f32>(0.5, -0.5) + 0.5;
+        let edge = smoothstep(0.0, 0.08, min(min(uh.x, 1.0 - uh.x), min(uh.y, 1.0 - uh.y)));
+        refl = mix(refl, textureSampleLevel(sceneTex, samp, uh, 0.0).rgb, edge);
+        break;
+      }
+      prevT = t;
+      t *= 1.28;
+    }
+  }
+
+  // refraction: follow the bent ray roughly as far as the water is thick
+  let T = refract(-Vd, N, 1.0 / 1.333);
+  // how far the bent ray runs before it meets whatever is behind the water
+  let travel = clamp(min(thick, max(scene.a - z, 0.0) * 1.05), 0.002, 0.22);
+  let cp = V.viewProj * vec4<f32>(wp + T * travel, 1.0);
+  let uvR = clamp((cp.xy / cp.w) * vec2<f32>(0.5, -0.5) + 0.5, vec2<f32>(0.001), vec2<f32>(0.999));
+  var bg = textureSampleLevel(sceneTex, samp, uvR, 0.0);
+  if (bg.a < z) { bg = scene; }
+
+  let absorb = exp(-V.absorb.rgb * thick);
+  var col = bg.rgb * absorb;
+  // a little forward scattering gives the body of water some presence
+  let lit = ambientLight(vec3<f32>(0.0, 1.0, 0.0)) + KEYCOL * 0.25;
+  col += vec3<f32>(0.006, 0.020, 0.024) * lit * (1.0 - exp(-thick * 5.0));
+  // aerated water and foam
+  let foamCol = (ambientLight(N) * 0.9 + KEYCOL * 0.22 * max(dot(N, KEYDIR) * 0.6 + 0.4, 0.0));
+  col = mix(col, foamCol, clamp(foam * 0.85, 0.0, 0.72));
+  col = mix(col, refl, F * (1.0 - foam * 0.7));
+  if (V.ortho.x > 0.5) {
+    let m = i32(V.ortho.x);
+    if (m == 1) { return vec4<f32>(N * 0.5 + 0.5, 1.0); }
+    if (m == 2) { return vec4<f32>(vec3<f32>(thick * 10.0), 1.0); }
+    if (m == 3) { return vec4<f32>(bg.rgb, 1.0); }
+    if (m == 4) { return vec4<f32>(refl * F, 1.0); }
+    if (m == 5) { return vec4<f32>(vec3<f32>(fract(z * 20.0)), 1.0); }
+    if (m == 7) { return vec4<f32>(N.x * 4.0 + 0.5, 0.5, N.z * 4.0 + 0.5, 1.0); }
+  }
+  return vec4<f32>(col, 1.0);
+}
+`;
+
+// =====================================================================
+// WGSL: meshes (counter, glass tank, mug, ball)
+// =====================================================================
+const MESH_WGSL = VIEW_WGSL + envWGSL() + /* wgsl */`
+struct Obj { model: mat4x4<f32>, params: vec4<f32>, color: vec4<f32> };
+@group(0) @binding(0) var<uniform> V: View;
+@group(0) @binding(1) var causTex: texture_2d<f32>;
+@group(0) @binding(2) var samp: sampler;
+@group(1) @binding(0) var<uniform> O: Obj;
+
+struct MOut {
+  @builtin(position) pos: vec4<f32>,
+  @location(0) wp: vec3<f32>,
+  @location(1) n: vec3<f32>,
+  @location(2) lp: vec3<f32>,
+  @location(3) extra: f32,
+  @location(4) vd: f32,
+};
+@vertex fn vsMesh(@location(0) p: vec3<f32>, @location(1) n: vec3<f32>, @location(2) e: f32) -> MOut {
+  let wp = (O.model * vec4<f32>(p, 1.0)).xyz;
+  var o: MOut;
+  o.pos = V.viewProj * vec4<f32>(wp, 1.0);
+  o.wp = wp;
+  o.n = (O.model * vec4<f32>(n, 0.0)).xyz;
+  o.lp = p;
+  o.extra = e;
+  o.vd = -(V.view * vec4<f32>(wp, 1.0)).z;
+  return o;
+}
+
+fn insideTank(p: vec3<f32>) -> bool {
+  return abs(p.x) < V.tank.x && abs(p.z) < V.tank.z;
+}
+fn caustic(p: vec3<f32>) -> f32 {
+  if (!insideTank(p)) { return 1.0; }
+  let uv = (p.xz - V.caus.xy) / (V.caus.zw - V.caus.xy);
+  // the key light is a softbox, not a point: soften the pattern a touch
+  let t = 1.6 / vec2<f32>(textureDimensions(causTex));
+  var c = textureSampleLevel(causTex, samp, uv, 0.0).r * 0.4;
+  c += textureSampleLevel(causTex, samp, uv + vec2<f32>(t.x, t.y), 0.0).r * 0.15;
+  c += textureSampleLevel(causTex, samp, uv + vec2<f32>(-t.x, t.y), 0.0).r * 0.15;
+  c += textureSampleLevel(causTex, samp, uv + vec2<f32>(t.x, -t.y), 0.0).r * 0.15;
+  c += textureSampleLevel(causTex, samp, uv + vec2<f32>(-t.x, -t.y), 0.0).r * 0.15;
+  return c;
+}
+
+fn shadeFloor(i: MOut, Vd: vec3<f32>) -> vec3<f32> {
+  let p = i.wp;
+  let tile = 0.10;
+  let tp = (p.xz + vec2<f32>(0.05, 0.05)) / tile;
+  let id = floor(tp);
+  let f = fract(tp);
+  let ed = min(min(f.x, 1.0 - f.x), min(f.y, 1.0 - f.y)) * tile;
+  let fw = max(fwidth(ed), 1e-5);
+  let grout = 1.0 - smoothstep(0.0014 - fw, 0.0014 + fw, ed);
+  let tv = hash21(id);
+  let m = vnoise(p.xz * 14.0 + id * 3.7) * 0.6 + vnoise(p.xz * 47.0) * 0.4;
+  let sp = smoothstep(0.80, 0.9, vnoise(p.xz * 420.0 + id * 11.0));
+  var alb = vec3<f32>(0.68, 0.655, 0.615) * (0.88 + 0.12 * tv) * (0.88 + 0.16 * m);
+  alb = mix(alb, vec3<f32>(0.42, 0.40, 0.37), sp * 0.5);
+  alb = mix(alb, vec3<f32>(0.30, 0.29, 0.27), grout);
+  let N = vec3<f32>(0.0, 1.0, 0.0);
+
+  // pool of light under the softbox
+  let pool = exp(-dot(p.xz, p.xz) / (0.42 * 0.42));
+  var direct = KEYCOL * max(dot(N, KEYDIR), 0.0) * (0.06 + 0.94 * pool);
+  var ao = 1.0;
+  let inside = insideTank(p);
+  if (inside) {
+    direct *= caustic(p);
+    let dw = min(V.tank.x - abs(p.x), V.tank.z - abs(p.z));
+    ao = 1.0 - 0.2 * exp(-dw / 0.01);
+    alb *= vec3<f32>(0.94, 0.985, 0.975);
+  } else {
+    let dx = max(abs(p.x) - V.tank.x - V.tank.w, 0.0);
+    let dz = max(abs(p.z) - V.tank.z - V.tank.w, 0.0);
+    let d = length(vec2<f32>(dx, dz));
+    ao = 1.0 - 0.55 * exp(-d / 0.010);
+  }
+  let diffuse = alb * (direct / 3.14159 + ambientLight(N) * ao * (0.35 + 0.65 * pool));
+  let NdV = max(dot(N, Vd), 0.0);
+  let F = 0.035 + 0.965 * pow(1.0 - NdV, 5.0);
+  let spec = envColor(reflect(-Vd, N), 0.42) * F * ao * (1.0 - grout * 0.8);
+  var c = diffuse * (1.0 - F) + spec;
+  // fade into the studio backdrop with distance
+  let dist = length(p.xz);
+  c = mix(c, envColor(normalize(vec3<f32>(-Vd.x, 0.02, -Vd.z)), 0.6) * 0.5, smoothstep(0.9, 3.0, dist));
+  return c;
+}
+
+fn shadeMug(i: MOut, N: vec3<f32>, Vd: vec3<f32>) -> vec3<f32> {
+  let inner = i.extra > 0.5;
+  var base = O.color.rgb;
+  if (inner) { base = vec3<f32>(0.80, 0.77, 0.70); }
+  // speckled stoneware
+  let sp = smoothstep(0.84, 0.93, vnoise(i.lp.xy * 900.0 + i.lp.z * 700.0));
+  base *= 1.0 - sp * 0.35;
+  let H = O.params.y;
+  var ao = 1.0;
+  if (inner) { ao = 0.32 + 0.68 * smoothstep(0.0, H, i.lp.y); }
+  let NdL = max(dot(N, KEYDIR), 0.0);
+  let diffuse = base * (KEYCOL * NdL * (0.55 + 0.45 * ao) / 3.14159 + ambientLight(N) * ao);
+  let NdV = max(dot(N, Vd), 0.0);
+  let F = 0.045 + 0.955 * pow(1.0 - NdV, 5.0);
+  let spec = envColor(reflect(-Vd, N), 0.04) * F * ao;
+  return diffuse * (1.0 - F) + spec;
+}
+
+fn shadeChrome(N: vec3<f32>, Vd: vec3<f32>) -> vec3<f32> {
+  let NdV = max(dot(N, Vd), 0.0);
+  let F0 = vec3<f32>(0.80, 0.80, 0.78);
+  let F = F0 + (vec3<f32>(1.0) - F0) * pow(1.0 - NdV, 5.0);
+  var r = reflect(-Vd, N);
+  var e = envColor(r, 0.02);
+  if (r.y < 0.0) { e = mix(e, vec3<f32>(0.25, 0.24, 0.22), smoothstep(0.0, -0.25, r.y)); }
+  return e * F;
+}
+
+@fragment fn fsOpaque(i: MOut) -> @location(0) vec4<f32> {
+  var N = normalize(i.n);
+  let Vd = normalize(V.camPos.xyz - i.wp);
+  let mat = O.params.x;
+  var c = vec3<f32>(0.0);
+  if (mat < 0.5) {
+    c = shadeFloor(i, Vd);
+  } else if (mat < 1.5) {
+    if (dot(N, Vd) < 0.0) { N = -N; }
+    c = shadeMug(i, N, Vd);
+  } else if (mat < 2.5) {
+    c = shadeChrome(N, Vd);
+  } else {
+    let NdV = max(dot(N, Vd), 0.0);
+    c = vec3<f32>(0.018, 0.02, 0.022) * (ambientLight(N) + KEYCOL * 0.1) + envColor(reflect(-Vd, N), 0.25) * 0.05 * pow(1.0 - NdV, 3.0);
+  }
+  return vec4<f32>(c, i.vd);
+}
+
+// Glass panes: reflection on the broad faces, a bottle-green body on the cut edges.
+@fragment fn fsGlass(i: MOut) -> @location(0) vec4<f32> {
+  let N = normalize(i.n);
+  let Vd = normalize(V.camPos.xyz - i.wp);
+  let NdV = abs(dot(N, Vd));
+  let F = 0.04 + 0.96 * pow(1.0 - NdV, 5.0);
+  let refl = envColor(reflect(-Vd, N), 0.0);
+  if (i.extra > 0.5) {
+    let edge = vec3<f32>(0.10, 0.28, 0.24);
+    let lit = edge * (ambientLight(N) * 1.6 + KEYCOL * 0.35 * max(dot(N, KEYDIR), 0.0)) + refl * F;
+    return vec4<f32>(lit * 0.9, 0.86);
+  }
+  let a = clamp(F, 0.0, 1.0) * 0.92 + 0.035;
+  return vec4<f32>(refl * F + vec3<f32>(0.002, 0.004, 0.0035), a);
+}
+
+@fragment fn fsMask(i: MOut) -> @location(0) vec4<f32> { return vec4<f32>(1.0, 0.0, 0.0, 1.0); }
+
+// Studio backdrop
+@vertex fn vsBg(@builtin(vertex_index) vi: u32) -> MOut {
+  var o: MOut;
+  let p = fullscreen(vi);
+  o.pos = vec4<f32>(p.xy, 1.0, 1.0);
+  o.wp = vec3<f32>(p.xy, 0.0);
+  o.n = vec3<f32>(0.0); o.lp = vec3<f32>(0.0); o.extra = 0.0; o.vd = 1.0e4;
+  return o;
+}
+@fragment fn fsBg(i: MOut) -> @location(0) vec4<f32> {
+  let h = V.invViewProj * vec4<f32>(i.wp.xy, 1.0, 1.0);
+  let d = normalize(h.xyz / h.w - V.camPos.xyz);
+  return vec4<f32>(envColor(d, 0.6) * 0.5, 1.0e4);
+}
+`;
+
+// =====================================================================
+// WGSL: caustics. One vertex per light texel; each triangle carries the light
+// it caught at the surface down to the floor, and its brightness is the ratio
+// of its area before and after refraction.
+// =====================================================================
+const CAUSTIC_WGSL = VIEW_WGSL + /* wgsl */`
+@group(0) @binding(0) var<uniform> L: View;
+@group(0) @binding(1) var lz: texture_2d<f32>;
+@group(0) @binding(2) var occ: texture_2d<f32>;
+@group(0) @binding(3) var samp: sampler;
+
+struct COut { @builtin(position) pos: vec4<f32>, @location(0) refp: vec2<f32>, @location(1) I: f32 };
+
+fn lightPoint(g: vec2<i32>, res: f32, d: f32) -> vec3<f32> {
+  let uv = (vec2<f32>(g) + 0.5) / res;
+  let xv = mix(L.ortho.x, L.ortho.y, uv.x);
+  let yv = mix(L.ortho.w, L.ortho.z, uv.y);
+  return (L.invView * vec4<f32>(xv, yv, -d, 1.0)).xyz;
+}
+fn depthAt(g: vec2<i32>, res: i32, fallback: f32) -> f32 {
+  let q = clamp(g, vec2<i32>(0), vec2<i32>(res - 1));
+  let d = textureLoad(lz, q, 0).r;
+  return select(fallback, d, d > 0.0);
+}
+@vertex fn vsCaustic(@builtin(vertex_index) vi: u32) -> COut {
+  let res = i32(L.screen.x);
+  let quad = i32(vi / 6u);
+  let corner = vi % 6u;
+  var cx = array<i32, 6>(0, 1, 1, 0, 1, 0);
+  var cy = array<i32, 6>(0, 0, 1, 0, 1, 1);
+  let g = vec2<i32>(quad % (res - 1) + cx[corner], quad / (res - 1) + cy[corner]);
+  let Ld = L.light.xyz;
+  let fres = f32(res);
+  let d = textureLoad(lz, g, 0).r;
+  let pe = lightPoint(g, fres, 0.0);
+  let t0 = (0.0 - pe.y) / (-Ld.y);
+  let H0 = pe - Ld * t0;
+  var H = H0;
+  var I = 1.0;
+  if (d > 0.0) {
+    let S = pe - Ld * d;
+    let sx1 = lightPoint(g + vec2<i32>(1, 0), fres, depthAt(g + vec2<i32>(1, 0), res, d));
+    let sx0 = lightPoint(g - vec2<i32>(1, 0), fres, depthAt(g - vec2<i32>(1, 0), res, d));
+    let sy1 = lightPoint(g + vec2<i32>(0, 1), fres, depthAt(g + vec2<i32>(0, 1), res, d));
+    let sy0 = lightPoint(g - vec2<i32>(0, 1), fres, depthAt(g - vec2<i32>(0, 1), res, d));
+    var N = normalize(cross(sx1 - sx0, sy1 - sy0));
+    if (dot(N, Ld) < 0.0) { N = -N; }
+    // Where the light first meets water through a side pane, refract as if through a level surface
+    // at that height. That keeps the mapping continuous instead of folding into a stripe.
+    let wallDist = min(L.tank.x - abs(S.x), L.tank.z - abs(S.z));
+    let nearWall = 1.0 - smoothstep(2.0 * L.grid.w, 4.5 * L.grid.w, wallDist);
+    let side = max(1.0 - smoothstep(0.35, 0.6, N.y), nearWall * (1.0 - smoothstep(0.8, 0.985, N.y)));
+    N = normalize(mix(N, vec3<f32>(0.0, 1.0, 0.0), side));
+    let T = refract(-Ld, N, 1.0 / 1.333);
+    if (T.y < -0.05 && S.y > 0.0) {
+      let t = (0.0 - S.y) / T.y;
+      H = S + T * t;
+      let cosI = max(dot(N, Ld), 0.0);
+      let Fr = 0.02 + 0.98 * pow(1.0 - cosI, 5.0);
+      I = (1.0 - Fr) * exp(-0.9 * t) / 0.98;
+    } else if (S.y > 0.0) {
+      I = 0.0;
+    }
+  }
+  let uvo = (vec2<f32>(g) + 0.5) / fres;
+  let ts = 2.5 / fres;
+  var o = textureSampleLevel(occ, samp, uvo, 0.0).r * 0.36;
+  o += textureSampleLevel(occ, samp, uvo + vec2<f32>(ts, 0.0), 0.0).r * 0.16;
+  o += textureSampleLevel(occ, samp, uvo - vec2<f32>(ts, 0.0), 0.0).r * 0.16;
+  o += textureSampleLevel(occ, samp, uvo + vec2<f32>(0.0, ts), 0.0).r * 0.16;
+  o += textureSampleLevel(occ, samp, uvo - vec2<f32>(0.0, ts), 0.0).r * 0.16;
+  I *= 1.0 - o * 0.85;
+  let ext = L.caus.zw - L.caus.xy;
+  let cuv = (H.xz - L.caus.xy) / ext;
+  var out: COut;
+  out.pos = vec4<f32>(cuv.x * 2.0 - 1.0, 1.0 - cuv.y * 2.0, 0.0, 1.0);
+  out.refp = (H0.xz - L.caus.xy) / ext;
+  out.I = I;
+  return out;
+}
+@fragment fn fsCaustic(i: COut) -> @location(0) vec4<f32> {
+  let a = dpdx(i.refp);
+  let b = dpdy(i.refp);
+  let a0 = abs(a.x * b.y - a.y * b.x) * L.screen.z * L.screen.w;
+  return vec4<f32>(min(i.I * a0, 24.0), 0.0, 0.0, 1.0);
+}
+`;
+
+// =====================================================================
+// WGSL: bloom + tonemap
+// =====================================================================
+const POST_WGSL = VIEW_WGSL + /* wgsl */`
+@group(0) @binding(0) var<uniform> V: View;
+@group(0) @binding(1) var src: texture_2d<f32>;
+@group(0) @binding(2) var samp: sampler;
+@group(0) @binding(3) var bloomTex: texture_2d<f32>;
+override MODE: i32 = 0;
+@vertex fn vsFull(@builtin(vertex_index) i: u32) -> @builtin(position) vec4<f32> { return fullscreen(i); }
+
+// 13-tap downsample (with soft threshold on the first level)
+@fragment fn fsDown(@builtin(position) fc: vec4<f32>) -> @location(0) vec4<f32> {
+  let dims = vec2<f32>(textureDimensions(src));
+  let uv = fc.xy / (dims * 0.5);
+  let t = 1.0 / dims;
+  var c = textureSampleLevel(src, samp, uv, 0.0).rgb * 0.5;
+  c += textureSampleLevel(src, samp, uv + vec2<f32>(-t.x, -t.y), 0.0).rgb * 0.125;
+  c += textureSampleLevel(src, samp, uv + vec2<f32>(t.x, -t.y), 0.0).rgb * 0.125;
+  c += textureSampleLevel(src, samp, uv + vec2<f32>(-t.x, t.y), 0.0).rgb * 0.125;
+  c += textureSampleLevel(src, samp, uv + vec2<f32>(t.x, t.y), 0.0).rgb * 0.125;
+  if (MODE == 1) {
+    let l = max(c.r, max(c.g, c.b));
+    let k = max(l - 1.2, 0.0);
+    c *= k * k / max(l * (k + 0.8), 1e-4);
+  }
+  return vec4<f32>(c, 1.0);
+}
+@fragment fn fsUp(@builtin(position) fc: vec4<f32>) -> @location(0) vec4<f32> {
+  let dims = vec2<f32>(textureDimensions(src));
+  let uv = fc.xy / (dims * 2.0);
+  let t = 1.0 / dims;
+  var c = textureSampleLevel(src, samp, uv, 0.0).rgb * 0.25;
+  c += textureSampleLevel(src, samp, uv + vec2<f32>(t.x, 0.0), 0.0).rgb * 0.125;
+  c += textureSampleLevel(src, samp, uv - vec2<f32>(t.x, 0.0), 0.0).rgb * 0.125;
+  c += textureSampleLevel(src, samp, uv + vec2<f32>(0.0, t.y), 0.0).rgb * 0.125;
+  c += textureSampleLevel(src, samp, uv - vec2<f32>(0.0, t.y), 0.0).rgb * 0.125;
+  c += textureSampleLevel(src, samp, uv + t, 0.0).rgb * 0.0625;
+  c += textureSampleLevel(src, samp, uv - t, 0.0).rgb * 0.0625;
+  c += textureSampleLevel(src, samp, uv + vec2<f32>(t.x, -t.y), 0.0).rgb * 0.0625;
+  c += textureSampleLevel(src, samp, uv + vec2<f32>(-t.x, t.y), 0.0).rgb * 0.0625;
+  return vec4<f32>(c, 1.0);
+}
+fn srgb(c: vec3<f32>) -> vec3<f32> {
+  let lo = c * 12.92;
+  let hi = 1.055 * pow(c, vec3<f32>(1.0 / 2.4)) - 0.055;
+  return select(hi, lo, c <= vec3<f32>(0.0031308));
+}
+@fragment fn fsTone(@builtin(position) fc: vec4<f32>) -> @location(0) vec4<f32> {
+  let uv = fc.xy * V.screen.zw;
+  var c = textureLoad(src, vec2<i32>(fc.xy), 0).rgb;
+  c += textureSampleLevel(bloomTex, samp, uv, 0.0).rgb * 0.22;
+  c *= V.misc.z;
+  let d = uv - 0.5;
+  c *= 1.0 - 0.32 * dot(d, d);
+  if (V.ortho.w > 0.5) {
+    let b = bitcast<vec3<u32>>(c) & vec3<u32>(0x7f800000u);
+    if (any(b == vec3<u32>(0x7f800000u))) { return vec4<f32>(1.0, 0.0, 1.0, 1.0); }
+  }
+  c = srgb(aces(c));
+  let n = fract(sin(dot(fc.xy, vec2<f32>(12.9898, 78.233))) * 43758.5453);
+  c += (n - 0.5) / 255.0;
+  return vec4<f32>(c, 1.0);
+}
+`;
+
+// =====================================================================
+// Geometry builders
+// =====================================================================
+function pushV(arr, p, n, e) { arr.push(p[0], p[1], p[2], n[0], n[1], n[2], e); }
+function boxMesh(min, max, thinAxis) {
+  const out = [];
+  const c = [(min[0] + max[0]) / 2, (min[1] + max[1]) / 2, (min[2] + max[2]) / 2];
+  const h = [(max[0] - min[0]) / 2, (max[1] - min[1]) / 2, (max[2] - min[2]) / 2];
+  for (let ax = 0; ax < 3; ax++) for (const s of [-1, 1]) {
+    const n = [0, 0, 0]; n[ax] = s;
+    const ua = (ax + 1) % 3, va = (ax + 2) % 3;
+    const u = [0, 0, 0], v = [0, 0, 0];
+    u[ua] = h[ua]; v[va] = h[va];
+    let uu = u, vv = v;
+    if (V3.dot(V3.cross(u, v), n) < 0) { uu = v; vv = u; }
+    const fc = [c[0] + n[0] * h[0], c[1] + n[1] * h[1], c[2] + n[2] * h[2]];
+    const q = [
+      V3.sub(V3.sub(fc, uu), vv), V3.sub(V3.add(fc, uu), vv), V3.add(V3.add(fc, uu), vv), V3.add(V3.sub(fc, uu), vv),
+    ];
+    const e = ax === thinAxis ? 0 : 1;
+    for (const k of [0, 1, 2, 0, 2, 3]) pushV(out, q[k], n, e);
+  }
+  return out;
+}
+function mugMesh(Ro, t, H, handle, segs = 80) {
+  const rm = Ro - t / 2, rc = t / 2, Ri = Ro - t;
+  const prof = [];
+  prof.push([0, 0, 0, -1, 0], [rm, 0, 0, -1, 0]);
+  for (let i = 0; i <= 8; i++) { const a = -Math.PI / 2 + (i / 8) * Math.PI / 2; prof.push([rm + rc * Math.cos(a), rc + rc * Math.sin(a), Math.cos(a), Math.sin(a), 0]); }
+  prof.push([Ro, H - rc, 1, 0, 0]);
+  for (let i = 0; i <= 12; i++) { const a = (i / 12) * Math.PI; prof.push([rm + rc * Math.cos(a), H - rc + rc * Math.sin(a), Math.cos(a), Math.sin(a), Math.cos(a) < 0.2 ? 1 : 0]); }
+  prof.push([Ri, t, -1, 0, 1]);
+  prof.push([Ri, t, 0, 1, 1], [0, t, 0, 1, 1]);
+  const out = [];
+  for (let j = 0; j < segs; j++) {
+    const a0 = (j / segs) * Math.PI * 2, a1 = ((j + 1) / segs) * Math.PI * 2;
+    const c0 = Math.cos(a0), s0 = Math.sin(a0), c1 = Math.cos(a1), s1 = Math.sin(a1);
+    for (let i = 0; i < prof.length - 1; i++) {
+      const A = prof[i], B = prof[i + 1];
+      const v = (P, c, s) => [[P[0] * c, P[1], P[0] * s], [P[2] * c, P[3], P[2] * s], P[4]];
+      const q = [v(A, c0, s0), v(A, c1, s1), v(B, c1, s1), v(B, c0, s0)];
+      for (const k of [0, 1, 2, 0, 2, 3]) pushV(out, q[k][0], q[k][1], q[k][2]);
+    }
+  }
+  // handle: torus arc in the local x-y plane
+  const { cx, cy, R, r, phi0, phi1 } = handle;
+  const nu = 40, nv = 16;
+  for (let i = 0; i < nu; i++) for (let k = 0; k < nv; k++) {
+    const pt = (ii, kk) => {
+      const ph = phi0 + (phi1 - phi0) * (ii / nu), be = (kk / nv) * Math.PI * 2;
+      const n = [Math.cos(be) * Math.cos(ph), Math.cos(be) * Math.sin(ph), Math.sin(be)];
+      return [[cx + (R + r * Math.cos(be)) * Math.cos(ph), cy + (R + r * Math.cos(be)) * Math.sin(ph), r * Math.sin(be)], n];
+    };
+    const q = [pt(i, k), pt(i + 1, k), pt(i + 1, k + 1), pt(i, k + 1)];
+    for (const kk of [0, 1, 2, 0, 2, 3]) pushV(out, q[kk][0], q[kk][1], 0);
+  }
+  return out;
+}
+function tubeMesh(path, r0, rEnd, capEnds = false, bendAxis = [1, 0, 0], nr = 28) {
+  const out = [];
+  const rings = path.map((c, i) => {
+    const a = path[Math.max(0, i - 1)], b = path[Math.min(path.length - 1, i + 1)];
+    const t = V3.norm(V3.sub(b, a));
+    let u = V3.cross(t, bendAxis); if (V3.len(u) < 1e-3) u = V3.cross(t, [0, 1, 0]);
+    u = V3.norm(u); const w = V3.cross(t, u);
+    const r = i === path.length - 1 ? rEnd : r0;
+    const ring = [];
+    for (let k = 0; k <= nr; k++) {
+      const th = (k / nr) * Math.PI * 2, n = V3.add(V3.scale(u, Math.cos(th)), V3.scale(w, Math.sin(th)));
+      ring.push([V3.add(c, V3.scale(n, r)), n]);
+    }
+    return { ring, c, t };
+  });
+  for (let i = 0; i < rings.length - 1; i++) for (let k = 0; k < nr; k++) {
+    const q = [rings[i].ring[k], rings[i].ring[k + 1], rings[i + 1].ring[k + 1], rings[i + 1].ring[k]];
+    for (const kk of [0, 1, 2, 0, 2, 3]) pushV(out, q[kk][0], q[kk][1], 0);
+  }
+  const cap = (R, sgn) => { for (let k = 0; k < nr; k++) { const n = V3.scale(R.t, sgn); pushV(out, R.c, n, 0); pushV(out, R.ring[k][0], n, 0); pushV(out, R.ring[k + 1][0], n, 0); } };
+  cap(rings[rings.length - 1], 1);
+  if (capEnds) cap(rings[0], -1);
+  return out;
+}
+function sphereMesh(R, nu = 48, nv = 28) {
+  const out = [];
+  const pt = (i, k) => {
+    const th = (i / nu) * Math.PI * 2, ph = (k / nv) * Math.PI;
+    const n = [Math.sin(ph) * Math.cos(th), Math.cos(ph), Math.sin(ph) * Math.sin(th)];
+    return [V3.scale(n, R), n];
+  };
+  for (let i = 0; i < nu; i++) for (let k = 0; k < nv; k++) {
+    const q = [pt(i, k), pt(i + 1, k), pt(i + 1, k + 1), pt(i, k + 1)];
+    for (const kk of [0, 1, 2, 0, 2, 3]) pushV(out, q[kk][0], q[kk][1], 0);
+  }
+  return out;
+}
+
+// =====================================================================
+// Audio: bubble resonances (what liquid sound mostly is) plus filtered noise
+// =====================================================================
+const audio = {
+  ctx: null, master: null, noiseGain: null, noiseFilter: null, level: 0, bubbleAcc: 0,
+  start() {
+    if (this.ctx || !state.sound) { if (this.ctx && this.ctx.state === 'suspended') this.ctx.resume(); return; }
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return;
+    const ctx = new AC();
+    this.ctx = ctx;
+    const comp = ctx.createDynamicsCompressor();
+    comp.threshold.value = -18; comp.ratio.value = 4; comp.attack.value = 0.003; comp.release.value = 0.15;
+    this.master = ctx.createGain();
+    this.master.gain.value = 0.55;
+    const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 7000;
+    this.master.connect(lp); lp.connect(comp); comp.connect(ctx.destination);
+    // continuous wash
+    const len = ctx.sampleRate * 2;
+    const buf = ctx.createBuffer(1, len, ctx.sampleRate);
+    const d = buf.getChannelData(0);
+    let b0 = 0, b1 = 0;
+    for (let i = 0; i < len; i++) { const w = Math.random() * 2 - 1; b0 = 0.97 * b0 + 0.03 * w; b1 = 0.6 * b1 + 0.4 * w; d[i] = b0 * 2.5 + b1 * 0.35; }
+    const src = ctx.createBufferSource(); src.buffer = buf; src.loop = true;
+    this.noiseFilter = ctx.createBiquadFilter(); this.noiseFilter.type = 'bandpass'; this.noiseFilter.frequency.value = 900; this.noiseFilter.Q.value = 0.7;
+    this.noiseGain = ctx.createGain(); this.noiseGain.gain.value = 0;
+    src.connect(this.noiseFilter); this.noiseFilter.connect(this.noiseGain); this.noiseGain.connect(this.master);
+    src.start();
+  },
+  setEnabled(on) {
+    state.sound = on;
+    if (on) { this.start(); if (this.ctx) this.ctx.resume(); }
+    else if (this.ctx) this.ctx.suspend();
+  },
+  bubble(t, intensity) {
+    const ctx = this.ctx;
+    const r = 0.0012 + Math.pow(Math.random(), 2.2) * 0.006;   // bubble radius (m)
+    const f0 = Math.min(3.26 / r, 4200);                          // Minnaert resonance
+    const dur = 0.025 + r * 9;
+    const o = ctx.createOscillator();
+    o.type = 'sine';
+    o.frequency.setValueAtTime(f0, t);
+    o.frequency.exponentialRampToValueAtTime(f0 * (1.08 + Math.random() * 0.22), t + dur);
+    const g = ctx.createGain();
+    const a = Math.min(0.11, 0.02 + intensity * 0.05) * (0.4 + Math.random() * 0.6);
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.linearRampToValueAtTime(a, t + 0.0025);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    const pan = ctx.createStereoPanner ? ctx.createStereoPanner() : null;
+    o.connect(g);
+    if (pan) { pan.pan.value = (Math.random() * 2 - 1) * 0.6; g.connect(pan); pan.connect(this.master); } else g.connect(this.master);
+    o.start(t); o.stop(t + dur + 0.02);
+  },
+  update(impact, fast, dt) {
+    if (!this.ctx || this.ctx.state !== 'running') return;
+    const now = this.ctx.currentTime;
+    const target = Math.min(1, Math.sqrt(impact) * 0.06);
+    this.level += (target - this.level) * (target > this.level ? 0.5 : 0.08);
+    this.noiseGain.gain.setTargetAtTime(this.level * 0.16, now, 0.03);
+    this.noiseFilter.frequency.setTargetAtTime(500 + this.level * 1800, now, 0.05);
+    const rate = Math.min(70, impact * 0.9);
+    this.bubbleAcc += rate * dt;
+    let n = 0;
+    while (this.bubbleAcc >= 1 && n < 6) { this.bubbleAcc -= 1; n++; this.bubble(now + Math.random() * dt, this.level); }
+    if (this.bubbleAcc > 3) this.bubbleAcc = 0;
+  },
+};
+
+// =====================================================================
+// Main
+// =====================================================================
+async function main() {
+  if (!navigator.gpu) {
+    showMessage('This needs WebGPU', 'Open this page in a recent Chrome, Edge or Safari (version 26 or later). On a Mac, Chrome and Safari both work.');
+    return;
+  }
+  const adapter = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });
+  if (!adapter) { showMessage('No GPU adapter available', 'WebGPU is present but the browser did not hand out a GPU. Check that hardware acceleration is turned on in the browser settings.'); return; }
+  const device = await adapter.requestDevice({
+    requiredLimits: {
+      maxStorageBufferBindingSize: Math.min(adapter.limits.maxStorageBufferBindingSize, 256 * 1024 * 1024),
+      maxBufferSize: Math.min(adapter.limits.maxBufferSize, 256 * 1024 * 1024),
+    },
+  });
+  let lostShown = false;
+  device.lost.then((info) => { if (!lostShown && info.reason !== 'destroyed') { lostShown = true; showMessage('The GPU device was lost', 'Reload the page to start again. ' + (info.message || '')); } });
+  device.addEventListener('uncapturederror', (e) => { console.error('WebGPU error:', e.error.message); window.__gpuErrors = (window.__gpuErrors || []); window.__gpuErrors.push(e.error.message); });
+
+  // ?offscreen renders into a texture and copies it to a 2D canvas (for headless testing)
+  const OFF = params.has('offscreen');
+  const dbg = { nosim: params.has('nosim'), nolight: params.has('nolight'), noview: params.has('noview') };
+  const ctx = OFF ? null : canvas.getContext('webgpu');
+  const ctx2d = OFF ? canvas.getContext('2d') : null;
+  const presentFormat = OFF ? 'rgba8unorm' : navigator.gpu.getPreferredCanvasFormat();
+  if (!OFF) ctx.configure({ device, format: presentFormat, alphaMode: 'opaque' });
+
+  const U = GPUBufferUsage, T = GPUTextureUsage;
+  const linSamp = device.createSampler({ magFilter: 'linear', minFilter: 'linear', addressModeU: 'clamp-to-edge', addressModeV: 'clamp-to-edge' });
+
+  // ---------- bind group layout helpers ----------
+  const VS = GPUShaderStage.VERTEX, FS = GPUShaderStage.FRAGMENT, CS = GPUShaderStage.COMPUTE;
+  const bgl = (entries) => device.createBindGroupLayout({ entries: entries.map((e, i) => ({ binding: i, ...e })) });
+  const ubo = (vis, dyn = false) => ({ visibility: vis, buffer: { type: 'uniform', hasDynamicOffset: dyn } });
+  const sto = (vis, ro = false) => ({ visibility: vis, buffer: { type: ro ? 'read-only-storage' : 'storage' } });
+  const tex = (vis, type = 'float') => ({ visibility: vis, texture: { sampleType: type } });
+  const smp = (vis) => ({ visibility: vis, sampler: { type: 'filtering' } });
+  const layout = (...b) => device.createPipelineLayout({ bindGroupLayouts: b });
+  const module = (code, label) => {
+    const m = device.createShaderModule({ code, label });
+    m.getCompilationInfo?.().then((info) => { for (const msg of info.messages) if (msg.type === 'error') console.error(label, msg.lineNum + ':' + msg.linePos, msg.message); });
+    return m;
+  };
+
+  const simBGL = bgl([ubo(CS, true), sto(CS), sto(CS), sto(CS), sto(CS), sto(CS), sto(CS), sto(CS), sto(CS)]);
+  const partBGL = device.createBindGroupLayout({ entries: [{ binding: 0, ...ubo(VS | FS) }, { binding: 1, ...sto(VS, true) }, { binding: 3, ...sto(VS, true) }] });
+  const thickBGL = bgl([ubo(VS | FS), sto(VS, true), tex(FS, 'depth')]);
+  const smoothBGL = bgl([ubo(FS), tex(FS, 'unfilterable-float')]);
+  const compBGL = bgl([ubo(FS), tex(FS), tex(FS, 'unfilterable-float'), tex(FS), smp(FS)]);
+  const meshBGL0 = bgl([ubo(VS | FS), tex(FS), smp(FS)]);
+  const meshBGL1 = bgl([ubo(VS | FS)]);
+  const causBGL = bgl([ubo(VS | FS), tex(VS, 'unfilterable-float'), tex(VS), smp(VS)]);
+  const postBGL = bgl([ubo(FS), tex(FS), smp(FS), tex(FS)]);
+
+  device.pushErrorScope('validation');
+  // ---------- shader modules (compiled once) ----------
+  const simMod = module(SIM_WGSL, 'sim');
+  const partMod = module(PARTICLE_WGSL, 'particles');
+  const thickMod = module(THICK_WGSL, 'thickness');
+  const smoothMod = module(SMOOTH_WGSL, 'smooth');
+  const compMod = module(COMPOSITE_WGSL, 'composite');
+  const meshMod = module(MESH_WGSL, 'mesh');
+  const causMod = module(CAUSTIC_WGSL, 'caustics');
+  const postMod = module(POST_WGSL, 'post');
+
+  // ---------- render pipelines (independent of quality) ----------
+  const meshVB = [{ arrayStride: 28, attributes: [
+    { shaderLocation: 0, offset: 0, format: 'float32x3' },
+    { shaderLocation: 1, offset: 12, format: 'float32x3' },
+    { shaderLocation: 2, offset: 24, format: 'float32' }] }];
+  const premul = { color: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' }, alpha: { srcFactor: 'zero', dstFactor: 'one', operation: 'add' } };
+  const addBlend = { color: { srcFactor: 'one', dstFactor: 'one', operation: 'add' }, alpha: { srcFactor: 'one', dstFactor: 'one', operation: 'add' } };
+  const HDR = 'rgba16float';
+  const meshPL = layout(meshBGL0, meshBGL1);
+  const mkMesh = (fs, target, depth, cull, blend) => device.createRenderPipeline({
+    layout: meshPL,
+    vertex: { module: meshMod, entryPoint: 'vsMesh', buffers: meshVB },
+    fragment: { module: meshMod, entryPoint: fs, targets: [{ format: target, blend }] },
+    primitive: { topology: 'triangle-list', cullMode: cull },
+    depthStencil: depth,
+  });
+  const depthRW = { format: 'depth32float', depthWriteEnabled: true, depthCompare: 'less' };
+  const depthRO = { format: 'depth32float', depthWriteEnabled: false, depthCompare: 'less' };
+  const pipes = {
+    bg: device.createRenderPipeline({
+      layout: meshPL,
+      vertex: { module: meshMod, entryPoint: 'vsBg' },
+      fragment: { module: meshMod, entryPoint: 'fsBg', targets: [{ format: HDR }] },
+      depthStencil: { format: 'depth32float', depthWriteEnabled: false, depthCompare: 'always' },
+    }),
+    opaque: mkMesh('fsOpaque', HDR, depthRW, 'none'),
+    glassFar: mkMesh('fsGlass', HDR, depthRO, 'back', premul),
+    opaqueNear: mkMesh('fsOpaque', HDR, undefined, 'none'),
+    glassNear: mkMesh('fsGlass', HDR, undefined, 'back', premul),
+    mask: mkMesh('fsMask', 'r8unorm', undefined, 'none'),
+    depth: device.createRenderPipeline({
+      layout: layout(partBGL),
+      vertex: { module: partMod, entryPoint: 'vsDepth' },
+      fragment: { module: partMod, entryPoint: 'fsDepth', targets: [{ format: 'r32float' }] },
+      primitive: { topology: 'triangle-list' },
+      depthStencil: depthRW,
+    }),
+    thick: device.createRenderPipeline({
+      layout: layout(thickBGL),
+      vertex: { module: thickMod, entryPoint: 'vsThick' },
+      fragment: { module: thickMod, entryPoint: 'fsThick', targets: [{ format: 'rg16float', blend: addBlend }] },
+      primitive: { topology: 'triangle-list' },
+    }),
+    smoothH: device.createRenderPipeline({
+      layout: layout(smoothBGL),
+      vertex: { module: smoothMod, entryPoint: 'vsFull' },
+      fragment: { module: smoothMod, entryPoint: 'fsSmooth', targets: [{ format: 'r32float' }], constants: { DIRX: 1, DIRY: 0 } },
+    }),
+    smoothV: device.createRenderPipeline({
+      layout: layout(smoothBGL),
+      vertex: { module: smoothMod, entryPoint: 'vsFull' },
+      fragment: { module: smoothMod, entryPoint: 'fsSmooth', targets: [{ format: 'r32float' }], constants: { DIRX: 0, DIRY: 1 } },
+    }),
+    composite: device.createRenderPipeline({
+      layout: layout(compBGL),
+      vertex: { module: compMod, entryPoint: 'vsFull' },
+      fragment: { module: compMod, entryPoint: 'fsComposite', targets: [{ format: HDR }] },
+    }),
+    caustic: device.createRenderPipeline({
+      layout: layout(causBGL),
+      vertex: { module: causMod, entryPoint: 'vsCaustic' },
+      fragment: { module: causMod, entryPoint: 'fsCaustic', targets: [{ format: 'r16float', blend: addBlend }] },
+      primitive: { topology: 'triangle-list', cullMode: 'none' },
+    }),
+    downFirst: device.createRenderPipeline({
+      layout: layout(postBGL), vertex: { module: postMod, entryPoint: 'vsFull' },
+      fragment: { module: postMod, entryPoint: 'fsDown', targets: [{ format: HDR }], constants: { MODE: 1 } },
+    }),
+    down: device.createRenderPipeline({
+      layout: layout(postBGL), vertex: { module: postMod, entryPoint: 'vsFull' },
+      fragment: { module: postMod, entryPoint: 'fsDown', targets: [{ format: HDR }], constants: { MODE: 0 } },
+    }),
+    up: device.createRenderPipeline({
+      layout: layout(postBGL), vertex: { module: postMod, entryPoint: 'vsFull' },
+      fragment: { module: postMod, entryPoint: 'fsUp', targets: [{ format: HDR, blend: addBlend }] },
+    }),
+    tone: device.createRenderPipeline({
+      layout: layout(postBGL), vertex: { module: postMod, entryPoint: 'vsFull' },
+      fragment: { module: postMod, entryPoint: 'fsTone', targets: [{ format: presentFormat }] },
+    }),
+  };
+
+  // ---------- uniforms ----------
+  const VIEW_FLOATS = 136;
+  const camUBO = device.createBuffer({ size: VIEW_FLOATS * 4, usage: U.UNIFORM | U.COPY_DST });
+  const lightUBO = device.createBuffer({ size: VIEW_FLOATS * 4, usage: U.UNIFORM | U.COPY_DST });
+  const camData = new Float32Array(VIEW_FLOATS);
+  const lightData = new Float32Array(VIEW_FLOATS);
+  const dummyTex = device.createTexture({ size: [1, 1], format: 'r16float', usage: T.TEXTURE_BINDING });
+
+  // object uniforms
+  function makeObj(verts) {
+    const data = new Float32Array(verts);
+    const vb = device.createBuffer({ size: data.byteLength, usage: U.VERTEX | U.COPY_DST });
+    device.queue.writeBuffer(vb, 0, data);
+    const ub = device.createBuffer({ size: 96, usage: U.UNIFORM | U.COPY_DST });
+    const bg = device.createBindGroup({ layout: meshBGL1, entries: [{ binding: 0, resource: { buffer: ub } }] });
+    return { vb, ub, bg, count: data.length / 7, u: new Float32Array(24) };
+  }
+  function setObj(o, model, mat, color = [1, 1, 1, 1], p1 = 0) {
+    o.u.set(model, 0); o.u[16] = mat; o.u[17] = p1; o.u.set(color, 20);
+    device.queue.writeBuffer(o.ub, 0, o.u);
+  }
+
+  // =====================================================================
+  // World (rebuilt when the detail level changes)
+  // =====================================================================
+  let W = null;
+  function buildWorld(qname) {
+    const q = QUALITY[qname];
+    let NX = Math.round(TANK.W / q.h); if (NX % 2) NX++;
+    const h = TANK.W / NX;
+    const NY = Math.round(TANK.H / h), NZ = Math.round(TANK.D / h);
+    const hx = NX * h / 2, Ht = NY * h, hz = NZ * h / 2;
+    const NN = (NX + 1) * (NY + 1) * (NZ + 1), NC = NX * NY * NZ;
+    const origin = [-hx, 0, -hz];
+
+    // mug dimensions (meters) and handle
+    const wall = Math.max(0.012, 1.2 * h);
+    const Ro = MUG.Ro, Hm = MUG.H, rm = Ro - wall / 2;
+    const y1 = 0.22 * Hm, y2 = 0.80 * Hm, Rh = 0.036, rh = 0.0065;
+    const ax = Ro - 0.3 * wall, cy = (y1 + y2) / 2;
+    const cx = ax + Math.sqrt(Rh * Rh - ((y2 - y1) / 2) ** 2);
+    // the arc runs from the upper attachment (about +2 rad) down through 0 (the outer side) to the lower one
+    const phiUpper = Math.atan2(y2 - cy, ax - cx), phiLower = Math.atan2(y1 - cy, ax - cx);
+    const handle = { cx, cy, R: Rh, r: rh, phi0: phiUpper + 0.08, phi1: phiLower - 0.08 };
+    const mugBound = Math.hypot(cx + Rh + rh, Hm / 2) + 0.004;
+
+    // particle budget: largest scene
+    const sub = 0.5; // particle spacing in cells
+    const cap = Math.ceil(NX * NZ * (0.126 / h) * 8 * 1.05) + 4096;
+
+    // ---- sim buffers ----
+    const SLOT = 512, MAXSUB = 4;
+    const simUBO = device.createBuffer({ size: SLOT * MAXSUB, usage: U.UNIFORM | U.COPY_DST });
+    const posB = device.createBuffer({ size: cap * 16, usage: U.STORAGE | U.COPY_DST | U.COPY_SRC });
+    const velB = device.createBuffer({ size: cap * 16, usage: U.STORAGE | U.COPY_DST | U.COPY_SRC });
+    const accLen = NN * 6 + NC * 2 + 16;
+    const accB = device.createBuffer({ size: accLen * 4, usage: U.STORAGE | U.COPY_DST | U.COPY_SRC });
+    const gvelB = device.createBuffer({ size: NN * 16, usage: U.STORAGE | U.COPY_DST });
+    const goldB = device.createBuffer({ size: NN * 16, usage: U.STORAGE | U.COPY_DST });
+    const cellB = device.createBuffer({ size: NC * 16, usage: U.STORAGE | U.COPY_DST });
+    const pressB = device.createBuffer({ size: NC * 4, usage: U.STORAGE | U.COPY_DST });
+    const statsOff = (NN * 6 + NC * 2) * 4;
+    const surfB = device.createBuffer({ size: (cap + 4) * 4, usage: U.STORAGE | U.INDIRECT | U.COPY_DST });
+    const readBufs = [0, 1, 2].map(() => ({ buf: device.createBuffer({ size: 16, usage: U.MAP_READ | U.COPY_DST }), busy: false }));
+    const simBG = device.createBindGroup({ layout: simBGL, entries: [
+      { binding: 0, resource: { buffer: simUBO, size: 416 } },
+      { binding: 1, resource: { buffer: posB } }, { binding: 2, resource: { buffer: velB } },
+      { binding: 3, resource: { buffer: accB } }, { binding: 4, resource: { buffer: gvelB } },
+      { binding: 5, resource: { buffer: goldB } }, { binding: 6, resource: { buffer: cellB } },
+      { binding: 7, resource: { buffer: pressB } }, { binding: 8, resource: { buffer: surfB } }] });
+    const simPL = layout(simBGL);
+    const consts = { NX, NY, NZ };
+    const cp = (entry, extra = {}) => device.createComputePipeline({ layout: simPL, compute: { module: simMod, entryPoint: entry, constants: { ...consts, ...extra } } });
+    const kern = {
+      p2g: cp('p2g'), cell: cp('cellUpdate'), grid: cp('gridUpdate'), rhs: cp('computeRhs'),
+      red: cp('rbgs', { COLOR: 0 }), black: cp('rbgs', { COLOR: 1 }), project: cp('project'), g2p: cp('g2p'),
+    };
+
+    // ---- light / caustics resources (fixed per world) ----
+    const lightRes = q.lightRes;
+    const causW = 320, causH = Math.round(320 * hz / hx);
+    const lightTarget = [0, Ht * 0.4, 0];
+    const lEye = V3.add(lightTarget, V3.scale(KEY, 1.5));
+    const lView = M4.lookAt(lEye, lightTarget, [0, 0, -1]);
+    let mn = [1e9, 1e9, 1e9], mx = [-1e9, -1e9, -1e9];
+    for (const X of [-hx, hx]) for (const Y of [0, Ht]) for (const Z of [-hz, hz]) {
+      const p = M4.point(lView, [X, Y, Z]);
+      mn = mn.map((v, i) => Math.min(v, p[i])); mx = mx.map((v, i) => Math.max(v, p[i]));
+    }
+    const pad = 0.02;
+    const side = Math.max(mx[0] - mn[0], mx[1] - mn[1]) + pad * 2;
+    const ocx = (mx[0] + mn[0]) / 2, ocy = (mx[1] + mn[1]) / 2;
+    const lo = [ocx - side / 2, ocx + side / 2, ocy - side / 2, ocy + side / 2];
+    const lNear = 0.05, lFar = -mn[2] + 0.3;
+    const lProj = M4.ortho(lo[0], lo[1], lo[2], lo[3], lNear, lFar);
+    const lightZ = device.createTexture({ size: [lightRes, lightRes], format: 'r32float', usage: T.RENDER_ATTACHMENT | T.TEXTURE_BINDING });
+    const lightZ2 = device.createTexture({ size: [lightRes, lightRes], format: 'r32float', usage: T.RENDER_ATTACHMENT | T.TEXTURE_BINDING });
+    const lightDepth = device.createTexture({ size: [lightRes, lightRes], format: 'depth32float', usage: T.RENDER_ATTACHMENT });
+    const occTex = device.createTexture({ size: [lightRes, lightRes], format: 'r8unorm', usage: T.RENDER_ATTACHMENT | T.TEXTURE_BINDING });
+    const causTex = device.createTexture({ size: [causW, causH], format: 'r16float', usage: T.RENDER_ATTACHMENT | T.TEXTURE_BINDING });
+
+    // light view uniform (static except particle count)
+    lightData.set(M4.mul(lProj, lView), 0);
+    lightData.set(lView, 16);
+    lightData.set(lProj, 32);
+    lightData.set(M4.inv(lView), 48);
+    lightData.set(M4.inv(lProj), 64);
+    lightData.set(M4.inv(M4.mul(lProj, lView)), 80);
+    lightData.set([...lEye, 0], 96);
+    lightData.set([lightRes, lightRes, causW, causH], 100);
+    lightData.set([...origin, h], 104);
+    lightData.set([0.62 * h, 0, 1.9 * h, 0.9 * h], 108);
+    lightData.set([...KEY, 1], 112);
+    lightData.set([hx, Ht, hz, TANK.glass], 116);
+    lightData.set([lightRes / side, 1, 1, TANK.base], 120);
+    lightData.set([-hx, -hz, hx, hz], 124);
+    lightData.set(lo, 128);
+    device.queue.writeBuffer(lightUBO, 0, lightData);
+
+    const partLightBG = device.createBindGroup({ layout: partBGL, entries: [{ binding: 0, resource: { buffer: lightUBO } }, { binding: 1, resource: { buffer: posB } }, { binding: 3, resource: { buffer: surfB } }] });
+    const partCamBG = device.createBindGroup({ layout: partBGL, entries: [{ binding: 0, resource: { buffer: camUBO } }, { binding: 1, resource: { buffer: posB } }, { binding: 3, resource: { buffer: surfB } }] });
+    const lightSmoothH = device.createBindGroup({ layout: smoothBGL, entries: [{ binding: 0, resource: { buffer: lightUBO } }, { binding: 1, resource: lightZ.createView() }] });
+    const lightSmoothV = device.createBindGroup({ layout: smoothBGL, entries: [{ binding: 0, resource: { buffer: lightUBO } }, { binding: 1, resource: lightZ2.createView() }] });
+    const causBG = device.createBindGroup({ layout: causBGL, entries: [
+      { binding: 0, resource: { buffer: lightUBO } }, { binding: 1, resource: lightZ.createView() },
+      { binding: 2, resource: occTex.createView() }, { binding: 3, resource: linSamp }] });
+    const meshCamBG = device.createBindGroup({ layout: meshBGL0, entries: [
+      { binding: 0, resource: { buffer: camUBO } }, { binding: 1, resource: causTex.createView() }, { binding: 2, resource: linSamp }] });
+    const meshLightBG = device.createBindGroup({ layout: meshBGL0, entries: [
+      { binding: 0, resource: { buffer: lightUBO } }, { binding: 1, resource: dummyTex.createView() }, { binding: 2, resource: linSamp }] });
+
+    // ---- meshes ----
+    const g = TANK.glass, gb = TANK.base;
+    const floorObj = makeObj((() => { const o = []; const S = 30; const y = -gb;
+      const q4 = [[-S, y, -S], [S, y, -S], [S, y, S], [-S, y, S]];
+      for (const k of [0, 2, 1, 0, 3, 2]) pushV(o, q4[k], [0, 1, 0], 0); return o; })());
+    setObj(floorObj, M4.ident(), 0);
+    const walls = [
+      { mesh: boxMesh([hx, 0, -hz - g], [hx + g, Ht, hz + g], 0), n: [1, 0, 0], c: [hx, 0, 0] },
+      { mesh: boxMesh([-hx - g, 0, -hz - g], [-hx, Ht, hz + g], 0), n: [-1, 0, 0], c: [-hx, 0, 0] },
+      { mesh: boxMesh([-hx, 0, hz], [hx, Ht, hz + g], 2), n: [0, 0, 1], c: [0, 0, hz] },
+      { mesh: boxMesh([-hx, 0, -hz - g], [hx, Ht, -hz], 2), n: [0, 0, -1], c: [0, 0, -hz] },
+    ].map((w) => { const o = makeObj(w.mesh); setObj(o, M4.ident(), 3); o.n = w.n; o.c = w.c; return o; });
+    const basePane = makeObj(boxMesh([-hx - g, -gb, -hz - g], [hx + g, 0, hz + g], 1)); setObj(basePane, M4.ident(), 3);
+    const mugObj = makeObj(mugMesh(Ro, wall, Hm, handle));
+    // gooseneck tap: rises beside the left pane, arcs over it, points straight down into the tank
+    const tapZ = -hz * 0.35, sideX = -hx - 0.05, tapX = -hx + 0.075, topY = Ht + 0.045;
+    const tapEnd = [tapX, Ht - 0.012, tapZ];
+    const tapPath = [];
+    for (let i = 0; i <= 6; i++) tapPath.push([sideX, -gb + (topY + gb) * (i / 6), tapZ]);
+    const arcR = (tapX - sideX) / 2, arcCx = (tapX + sideX) / 2;
+    for (let i = 1; i <= 24; i++) { const a = Math.PI - Math.PI * (i / 24); tapPath.push([arcCx + Math.cos(a) * arcR, topY + Math.sin(a) * arcR, tapZ]); }
+    for (let i = 1; i <= 3; i++) tapPath.push([tapX, topY + (tapEnd[1] - topY) * (i / 3), tapZ]);
+    const tapObj = makeObj(tubeMesh(tapPath, 0.0105, 0.0125, false, [0, 0, 1]));
+    setObj(tapObj, M4.ident(), 2);
+    const tapBase = makeObj(tubeMesh([[sideX, -gb, tapZ], [sideX, -gb + 0.012, tapZ]], 0.028, 0.028, true, [0, 0, 1]));
+    setObj(tapBase, M4.ident(), 2);
+    const ballObj = makeObj(sphereMesh(BALL_R));
+
+    return {
+      qname, q, NX, NY, NZ, NN, NC, h, hx, Ht, hz, origin, cap, sub,
+      wall, Ro, Hm, rm, handle, mugBound,
+      simUBO, SLOT, MAXSUB, posB, velB, surfB, accB, gvelB, goldB, cellB, pressB, statsOff, readBufs, simBG, kern,
+      lightRes, causW, causH, lightZ, lightZ2, lightDepth, occTex, causTex,
+      partLightBG, partCamBG, lightSmoothH, lightSmoothV, causBG, meshCamBG, meshLightBG,
+      floorObj, walls, basePane, mugObj, ballObj, tapObj, tapBase, tapEnd, tapAcc: 0,
+      count: 0, frame: 0, stats: [0, 0, 0, 0], mugCapacity: 1,
+      screen: null,
+    };
+  }
+
+  // ---------- screen-sized targets ----------
+  function buildScreen(w, h) {
+    const mk = (fmt, ww = w, hh = h, extra = 0) => device.createTexture({ size: [ww, hh], format: fmt, usage: T.RENDER_ATTACHMENT | T.TEXTURE_BINDING | extra });
+    const hw = Math.max(1, Math.ceil(w / 2)), hh = Math.max(1, Math.ceil(h / 2));
+    const S = {
+      w, h, hw, hh,
+      scene: mk(HDR), depth: mk('depth32float'), fluidZ: mk('r32float'), fluidZ2: mk('r32float'),
+      thick: mk('rg16float', hw, hh), hdr: mk(HDR),
+      bloom: [],
+    };
+    let bw = hw, bh = hh;
+    for (let i = 0; i < 5; i++) { S.bloom.push(mk(HDR, Math.max(1, bw), Math.max(1, bh))); bw = Math.ceil(bw / 2); bh = Math.ceil(bh / 2); }
+    S.thickBG = device.createBindGroup({ layout: thickBGL, entries: [
+      { binding: 0, resource: { buffer: camUBO } }, { binding: 1, resource: { buffer: W.posB } }, { binding: 2, resource: S.depth.createView() }] });
+    S.smooth1 = device.createBindGroup({ layout: smoothBGL, entries: [{ binding: 0, resource: { buffer: camUBO } }, { binding: 1, resource: S.fluidZ.createView() }] });
+    S.smooth2 = device.createBindGroup({ layout: smoothBGL, entries: [{ binding: 0, resource: { buffer: camUBO } }, { binding: 1, resource: S.fluidZ2.createView() }] });
+    S.compBG = device.createBindGroup({ layout: compBGL, entries: [
+      { binding: 0, resource: { buffer: camUBO } }, { binding: 1, resource: S.scene.createView() },
+      { binding: 2, resource: S.fluidZ.createView() }, { binding: 3, resource: S.thick.createView() }, { binding: 4, resource: linSamp }] });
+    const postBG = (src, bloom) => device.createBindGroup({ layout: postBGL, entries: [
+      { binding: 0, resource: { buffer: camUBO } }, { binding: 1, resource: src.createView() }, { binding: 2, resource: linSamp }, { binding: 3, resource: (bloom || dummyTex).createView() }] });
+    S.downBG = [postBG(S.hdr)];
+    for (let i = 1; i < S.bloom.length; i++) S.downBG.push(postBG(S.bloom[i - 1]));
+    S.upBG = [];
+    for (let i = S.bloom.length - 1; i > 0; i--) S.upBG.push({ src: postBG(S.bloom[i]), dst: S.bloom[i - 1] });
+    S.toneBG = postBG(S.hdr, S.bloom[0]);
+    if (OFF) {
+      S.off = device.createTexture({ size: [w, h], format: 'rgba8unorm', usage: T.RENDER_ATTACHMENT | T.COPY_SRC });
+      S.bpr = Math.ceil(w * 4 / 256) * 256;
+      S.offBuf = device.createBuffer({ size: S.bpr * h, usage: U.MAP_READ | U.COPY_DST });
+      S.offBusy = false;
+    }
+    return S;
+  }
+
+  // =====================================================================
+  // Scenes
+  // =====================================================================
+  function buildScene(name) {
+    const { NX, NY, NZ, h, cap } = W;
+    const pos = new Float32Array(cap * 4);
+    let n = 0;
+    const jit = () => (Math.random() - 0.5) * 0.36;
+    const add = (x, y, z) => { if (n >= cap) return; pos[n * 4] = x; pos[n * 4 + 1] = y; pos[n * 4 + 2] = z; pos[n * 4 + 3] = 0; n++; };
+    const fill = (inside, x0, x1, y0, y1, z0, z1) => {
+      for (let k = Math.floor(z0 * 2); k < Math.ceil(z1 * 2); k++)
+        for (let j = Math.floor(y0 * 2); j < Math.ceil(y1 * 2); j++)
+          for (let i = Math.floor(x0 * 2); i < Math.ceil(x1 * 2); i++) {
+            const x = (i + 0.5) * 0.5, y = (j + 0.5) * 0.5, z = (k + 0.5) * 0.5;
+            if (x < 0.3 || x > NX - 0.3 || y < 0.3 || z < 0.3 || z > NZ - 0.3) continue;
+            if (!inside(x, y, z)) continue;
+            add(x + jit() * 0.5, y + jit() * 0.5, z + jit() * 0.5);
+          }
+    };
+    const all = () => true;
+    if (name === 'slosh') {
+      fill(all, 0, NX * 0.36, 0, 0.27 / h, 0, NZ);
+      fill(all, NX * 0.36, NX, 0, 0.018 / h, 0, NZ);
+    } else if (name === 'drop') {
+      fill(all, 0, NX, 0, 0.088 / h, 0, NZ);
+      const c = [NX * 0.62, 0.235 / h, NZ * 0.5], r = 0.072 / h;
+      fill((x, y, z) => (x - c[0]) ** 2 + (y - c[1]) ** 2 + (z - c[2]) ** 2 < r * r, c[0] - r, c[0] + r, c[1] - r, c[1] + r, c[2] - r, c[2] + r);
+    } else {
+      fill(all, 0, NX, 0, 0.125 / h, 0, NZ);
+    }
+    return { pos, n };
+  }
+  function resetScene(name) {
+    const { pos, n } = buildScene(name);
+    W.count = n;
+    W.calm = 0.6;
+    device.queue.writeBuffer(W.surfB, 0, new Uint32Array([12, 0, 0, 0]));
+    device.queue.writeBuffer(W.posB, 0, pos, 0, n * 4);
+    const enc = device.createCommandEncoder();
+    enc.clearBuffer(W.velB); enc.clearBuffer(W.accB); enc.clearBuffer(W.gvelB); enc.clearBuffer(W.goldB);
+    enc.clearBuffer(W.cellB); enc.clearBuffer(W.pressB);
+    device.queue.submit([enc.finish()]);
+    state.scene = name;
+  }
+
+  // =====================================================================
+  // Camera and tools
+  // =====================================================================
+  const cam = { yaw: 0.52, pitch: 0.40, dist: 1.08, target: [0, 0.115, 0], fov: 38 * Math.PI / 180 };
+  let camYawVel = 0;
+  const camInfo = { eye: [0, 0, 1], view: M4.ident(), proj: M4.ident(), vp: M4.ident(), ivp: M4.ident(), fH: [0, 0, -1], right: [1, 0, 0] };
+  function updateCamera(aspect) {
+    const cp = Math.cos(cam.pitch);
+    const eye = V3.add(cam.target, V3.scale([Math.sin(cam.yaw) * cp, Math.sin(cam.pitch), Math.cos(cam.yaw) * cp], cam.dist));
+    const view = M4.lookAt(eye, cam.target, [0, 1, 0]);
+    const proj = M4.persp(cam.fov, aspect, 0.02, 40);
+    const vp = M4.mul(proj, view);
+    const f = V3.norm(V3.sub(cam.target, eye));
+    Object.assign(camInfo, { eye, view, proj, vp, ivp: M4.inv(vp), fH: V3.norm([f[0], 0, f[2]]), right: V3.norm([-f[2], 0, f[0]]) });
+  }
+  function pointerRay(px, py) {
+    const r = canvas.getBoundingClientRect();
+    const nx = ((px - r.left) / r.width) * 2 - 1, ny = 1 - ((py - r.top) / r.height) * 2;
+    const b = (() => { const m = camInfo.ivp; const x = nx, y = ny, z = 1; const w = m[3] * x + m[7] * y + m[11] * z + m[15];
+      return [(m[0] * x + m[4] * y + m[8] * z + m[12]) / w, (m[1] * x + m[5] * y + m[9] * z + m[13]) / w, (m[2] * x + m[6] * y + m[10] * z + m[14]) / w]; })();
+    const a2 = (() => { const m = camInfo.ivp; const x = nx, y = ny, z = 0; const w = m[3] * x + m[7] * y + m[11] * z + m[15];
+      return [(m[0] * x + m[4] * y + m[8] * z + m[12]) / w, (m[1] * x + m[5] * y + m[9] * z + m[13]) / w, (m[2] * x + m[6] * y + m[10] * z + m[14]) / w]; })();
+    return { o: a2, d: V3.norm(V3.sub(b, a2)) };
+  }
+
+  const tool = {
+    pos: [0.10, 0.20, 0.02], yaw: 0, tilt: 0, target: [0.10, 0.20, 0.02],
+    prev: { pos: [0.10, 0.20, 0.02], yaw: 0, tilt: 0 },
+    ballPos: [-0.05, 0.22, 0], ballPrev: [-0.05, 0.22, 0],
+  };
+  function mugLocalCorners() {
+    const { Ro, Hm, handle } = W;
+    const xs = [-Ro, handle.cx + handle.R + handle.r], ys = [0, Hm], zs = [-Ro, Ro];
+    const out = [];
+    for (const x of xs) for (const y of ys) for (const z of zs) out.push([x, y - Hm / 2, z]);
+    return out;
+  }
+  function mugModel(p, yaw, tilt) {
+    return M4.mul(M4.trans(p[0], p[1], p[2]), M4.mul(M4.rotY(yaw), M4.mul(M4.rotZ(tilt), M4.trans(0, -W.Hm / 2, 0))));
+  }
+  function clampMug(p, yaw, tilt) {
+    const R = M4.mul(M4.rotY(yaw), M4.rotZ(tilt));
+    let mn = [1e9, 1e9, 1e9], mx = [-1e9, -1e9, -1e9];
+    for (const c of mugLocalCorners()) { const w = M4.point(R, c); mn = mn.map((v, i) => Math.min(v, w[i])); mx = mx.map((v, i) => Math.max(v, w[i])); }
+    const m = 0.004, out = p.slice();
+    const lim = [[-W.hx + m, W.hx - m], [0.003, W.Ht - 0.006], [-W.hz + m, W.hz - m]];
+    for (let i = 0; i < 3; i++) {
+      if (out[i] + mn[i] < lim[i][0]) out[i] = lim[i][0] - mn[i];
+      if (out[i] + mx[i] > lim[i][1]) out[i] = lim[i][1] - mx[i];
+    }
+    return out;
+  }
+  function clampBall(p) {
+    const m = BALL_R + 0.004;
+    return [Math.max(-W.hx + m, Math.min(W.hx - m, p[0])), Math.max(m, Math.min(W.Ht - m, p[1])), Math.max(-W.hz + m, Math.min(W.hz - m, p[2]))];
+  }
+  function updateToolTarget() {
+    if (!state.pointer.has) return;
+    const { o, d } = pointerRay(state.pointer.x, state.pointer.y);
+    const n = camInfo.fH;
+    const P0 = V3.add([0, 0, 0], V3.scale(n, state.depth));
+    const den = V3.dot(d, n);
+    if (Math.abs(den) < 1e-4) return;
+    const t = V3.dot(V3.sub(P0, o), n) / den;
+    if (t <= 0) return;
+    tool.target = V3.add(o, V3.scale(d, t));
+  }
+  function stepTool(dt) {
+    tool.prev = { pos: tool.pos.slice(), yaw: tool.yaw, tilt: tool.tilt };
+    tool.ballPrev = tool.ballPos.slice();
+    const k = 1 - Math.exp(-dt / 0.045);
+    const vmax = 1.1;
+    if (state.tool === 'mug') {
+      const yawT = Math.atan2(-camInfo.right[2], camInfo.right[0]);
+      let dy = yawT - tool.yaw; while (dy > Math.PI) dy -= 2 * Math.PI; while (dy < -Math.PI) dy += 2 * Math.PI;
+      tool.yaw += Math.max(-3 * dt, Math.min(3 * dt, dy * k));
+      const pouring = state.pour || state.pourKey || state.pourTouch;
+      let tiltT = tool.tiltTarget ?? 0;
+      if (pouring) tiltT = Math.min(2.35, tiltT + 1.5 * dt);
+      else if (state.tiltKeys !== 0) tiltT = Math.max(-2.35, Math.min(2.35, tiltT + state.tiltKeys * 1.5 * dt));
+      else tiltT += (0 - tiltT) * (1 - Math.exp(-dt / 0.18));
+      tool.tiltTarget = tiltT;
+      const dtl = tiltT - tool.tilt;
+      tool.tilt += Math.max(-3.2 * dt, Math.min(3.2 * dt, dtl * (1 - Math.exp(-dt / 0.06))));
+      let dp = V3.scale(V3.sub(tool.target, tool.pos), k);
+      const l = V3.len(dp); if (l > vmax * dt) dp = V3.scale(dp, vmax * dt / l);
+      tool.pos = clampMug(V3.add(tool.pos, dp), tool.yaw, tool.tilt);
+    } else if (state.tool === 'ball') {
+      let dp = V3.scale(V3.sub(tool.target, tool.ballPos), k);
+      const l = V3.len(dp); if (l > vmax * dt) dp = V3.scale(dp, vmax * dt / l);
+      tool.ballPos = clampBall(V3.add(tool.ballPos, dp));
+    }
+  }
+
+  // =====================================================================
+  // Per-frame uniforms
+  // =====================================================================
+  const simData = new ArrayBuffer(512 * 4);
+  const simF = new Float32Array(simData), simU32 = new Uint32Array(simData);
+  function writeSimUniforms(nsub, dt, frameDt) {
+    const { h, origin, wall, Hm, rm, handle, mugBound } = W;
+    const toGrid = (p) => [(p[0] - origin[0]) / h, (p[1] - origin[1]) / h, (p[2] - origin[2]) / h];
+    const g = -9.81 / h;
+    const lerp = (a, b, t) => a + (b - a) * t;
+    const lerp3 = (a, b, t) => [lerp(a[0], b[0], t), lerp(a[1], b[1], t), lerp(a[2], b[2], t)];
+    const P0 = tool.prev, P1 = tool;
+    let dyaw = P1.yaw - P0.yaw; while (dyaw > Math.PI) dyaw -= 2 * Math.PI; while (dyaw < -Math.PI) dyaw += 2 * Math.PI;
+    const linV = V3.scale(V3.sub(P1.pos, P0.pos), 1 / (h * frameDt));
+    const yawRate = dyaw / frameDt, tiltRate = (P1.tilt - P0.tilt) / frameDt;
+    const ballV = V3.scale(V3.sub(tool.ballPos, tool.ballPrev), 1 / (h * frameDt));
+    const mugOn = state.tool === 'mug';
+    const ballOn = state.tool === 'ball';
+    // tap flow: stream area x exit speed, in particles, carried over between substeps
+    const tapCount = [];
+    for (let s = 0; s < nsub; s++) {
+      if (state.tap) { W.tapAcc += Math.PI * 0.0085 ** 2 * 0.55 * dt / ((h * 0.5) ** 3); }
+      const c = Math.floor(W.tapAcc); W.tapAcc -= c; tapCount.push(c);
+    }
+    for (let s = 0; s < nsub; s++) {
+      const base = s * 128;
+      const t0 = s / nsub, t1 = (s + 1) / nsub;
+      const poseAt = (t) => {
+        const pos = lerp3(P0.pos, P1.pos, t), yaw = P0.yaw + dyaw * t, tilt = lerp(P0.tilt, P1.tilt, t);
+        const pg = toGrid(pos);
+        return M4.mul(M4.trans(pg[0], pg[1], pg[2]), M4.mul(M4.rotY(yaw), M4.mul(M4.rotZ(tilt), M4.trans(0, -Hm / (2 * h), 0))));
+      };
+      const M1 = poseAt(t1), M0 = poseAt(t0);
+      simF.set(M1, base); simF.set(M4.inv(M1), base + 16); simF.set(M4.inv(M0), base + 32);
+      const yawMid = P0.yaw + dyaw * (t0 + t1) / 2;
+      const zAxis = [Math.sin(yawMid), 0, Math.cos(yawMid)];
+      const ang = V3.add([0, yawRate, 0], V3.scale(zAxis, tiltRate));
+      simF.set([...linV, mugOn ? 1 : 0], base + 48);
+      simF.set([...ang, 0], base + 52);
+      simF.set([...toGrid(lerp3(P0.pos, P1.pos, t1)), mugBound / h], base + 56);
+      simF.set([rm / h, wall / h, Hm / h, 0], base + 60);
+      simF.set([handle.cx / h, handle.cy / h, handle.R / h, handle.r / h], base + 64);
+      simF.set([...toGrid(lerp3(tool.ballPrev, tool.ballPos, t1)), ballOn ? BALL_R / h : 0], base + 68);
+      simF.set([...toGrid(lerp3(tool.ballPrev, tool.ballPos, t0)), 0], base + 72);
+      simF.set([...ballV, 0], base + 76);
+      simF.set([dt, g, 0.96, 0.05], base + 80);
+      simF.set([7.85, 1.72, 0.28, 5.0 / h], base + 84);
+      simU32[base + 88] = W.count; simU32[base + 89] = W.frame; simU32[base + 90] = s === nsub - 1 ? 1 : 0;
+      simF.set([...toGrid(W.tapEnd), 0.0085 / h], base + 96);
+      simF.set([-0.55 / h, tapCount[s], state.tap ? 1 : 0, Math.random()], base + 100);
+      simF.set([W.calm > 0 ? 0 : 0.35, Math.exp(-dt / 1.1), 3.5 * Math.abs(g), performance.now() / 1000], base + 92);
+    }
+    device.queue.writeBuffer(W.simUBO, 0, simData, 0, nsub * 512);
+  }
+  function writeCamUniforms(S, time) {
+    updateCamera(S.w / S.h);
+    const { h, origin, hx, Ht, hz } = W;
+    camData.set(camInfo.vp, 0);
+    camData.set(camInfo.view, 16);
+    camData.set(camInfo.proj, 32);
+    camData.set(M4.inv(camInfo.view), 48);
+    camData.set(M4.inv(camInfo.proj), 64);
+    camData.set(camInfo.ivp, 80);
+    camData.set([...camInfo.eye, time], 96);
+    camData.set([S.w, S.h, 1 / S.w, 1 / S.h], 100);
+    camData.set([...origin, h], 104);
+    const r = 0.62 * h;
+    const vol = (0.5 * h) ** 3 / ((4 / 3) * Math.PI * (r * 1.25) ** 3);
+    camData.set([r, vol, 1.5 * h, 0.85 * h], 108);
+    camData.set([...KEY, 1], 112);
+    camData.set([hx, Ht, hz, TANK.glass], 116);
+    camData.set([camInfo.proj[5] * S.h / 2, 0, 0.92, TANK.base], 120);
+    camData.set([-hx, -hz, hx, hz], 124);
+    camData.set([+(params.get('dbg') || 0), 0, 0, params.has('nan') ? 1 : 0], 128);
+    camData.set([2.4, 0.62, 0.40, 0.85], 132);
+    device.queue.writeBuffer(camUBO, 0, camData);
+  }
+
+  // =====================================================================
+  // Frame encoding
+  // =====================================================================
+  function encodeSim(enc, nsub) {
+    const { kern, simBG, count, NC, NN } = W;
+    const pass = enc.beginComputePass();
+    const wg = (n) => Math.ceil(n / 64);
+    for (let s = 0; s < nsub; s++) {
+      pass.setBindGroup(0, simBG, [s * 512]);
+      pass.setPipeline(kern.p2g); pass.dispatchWorkgroups(wg(count));
+      pass.setPipeline(kern.cell); pass.dispatchWorkgroups(wg(NC));
+      pass.setPipeline(kern.grid); pass.dispatchWorkgroups(wg(NN));
+      pass.setPipeline(kern.rhs); pass.dispatchWorkgroups(wg(NC));
+      for (let it = 0; it < W.q.iters; it++) {
+        pass.setPipeline(kern.red); pass.dispatchWorkgroups(wg(NC / 2));
+        pass.setPipeline(kern.black); pass.dispatchWorkgroups(wg(NC / 2));
+      }
+      pass.setPipeline(kern.project); pass.dispatchWorkgroups(wg(NN));
+      pass.setPipeline(kern.g2p); pass.dispatchWorkgroups(wg(count));
+    }
+    pass.end();
+  }
+  function drawObj(pass, o) { pass.setBindGroup(1, o.bg); pass.setVertexBuffer(0, o.vb); pass.draw(o.count); }
+
+  function encodeLight(enc) {
+    const { lightRes } = W;
+    // occluders seen by the key light
+    let pass = enc.beginRenderPass({ colorAttachments: [{ view: W.occTex.createView(), loadOp: 'clear', storeOp: 'store', clearValue: [0, 0, 0, 0] }] });
+    pass.setPipeline(pipes.mask); pass.setBindGroup(0, W.meshLightBG);
+    drawObj(pass, W.tapObj);
+    if (state.tool === 'mug') drawObj(pass, W.mugObj);
+    if (state.tool === 'ball') drawObj(pass, W.ballObj);
+    pass.end();
+    // water surface seen by the key light
+    pass = enc.beginRenderPass({
+      colorAttachments: [{ view: W.lightZ.createView(), loadOp: 'clear', storeOp: 'store', clearValue: [0, 0, 0, 0] }],
+      depthStencilAttachment: { view: W.lightDepth.createView(), depthLoadOp: 'clear', depthStoreOp: 'store', depthClearValue: 1 },
+    });
+    pass.setPipeline(pipes.depth); pass.setBindGroup(0, W.partLightBG); pass.drawIndirect(W.surfB, 0);
+    pass.end();
+    const fsPass = (pipe, bg, target) => {
+      const p = enc.beginRenderPass({ colorAttachments: [{ view: target.createView(), loadOp: 'clear', storeOp: 'store', clearValue: [0, 0, 0, 0] }] });
+      p.setPipeline(pipe); p.setBindGroup(0, bg); p.draw(3); p.end();
+    };
+    fsPass(pipes.smoothH, W.lightSmoothH, W.lightZ2);
+    fsPass(pipes.smoothV, W.lightSmoothV, W.lightZ);
+    pass = enc.beginRenderPass({ colorAttachments: [{ view: W.causTex.createView(), loadOp: 'clear', storeOp: 'store', clearValue: [0, 0, 0, 0] }] });
+    pass.setPipeline(pipes.caustic); pass.setBindGroup(0, W.causBG); pass.draw((lightRes - 1) * (lightRes - 1) * 6);
+    pass.end();
+  }
+
+  const stopAt = params.has('stop') ? +params.get('stop') : 99;
+  function encodeView(enc, S, target) {
+    const near = W.walls.map((w) => V3.dot(V3.sub(camInfo.eye, w.c), w.n) > 0);
+    if (stopAt <= 0) return;
+    if (params.has('only')) {
+      const which = params.get('only');
+      const pass = enc.beginRenderPass({
+        colorAttachments: [{ view: S.scene.createView(), loadOp: 'clear', storeOp: 'store', clearValue: [0, 0, 0, 1e4] }],
+        depthStencilAttachment: { view: S.depth.createView(), depthLoadOp: 'clear', depthStoreOp: 'store', depthClearValue: 1 },
+      });
+      pass.setBindGroup(0, W.meshCamBG);
+      if (which === 'bg') { pass.setPipeline(pipes.bg); pass.draw(3); }
+      if (which === 'floor') { pass.setPipeline(pipes.opaque); drawObj(pass, W.floorObj); }
+      if (which === 'mug') { pass.setPipeline(pipes.opaque); drawObj(pass, W.mugObj); }
+      if (which === 'glass') { pass.setPipeline(pipes.glassFar); drawObj(pass, W.basePane); }
+      pass.end();
+      return;
+    }
+    // ---- opaque scene ----
+    let pass = enc.beginRenderPass({
+      colorAttachments: [{ view: S.scene.createView(), loadOp: 'clear', storeOp: 'store', clearValue: [0, 0, 0, 1e4] }],
+      depthStencilAttachment: { view: S.depth.createView(), depthLoadOp: 'clear', depthStoreOp: 'store', depthClearValue: 1 },
+    });
+    pass.setBindGroup(0, W.meshCamBG);
+    pass.setBindGroup(1, W.floorObj.bg);
+    pass.setPipeline(pipes.bg); pass.draw(3);
+    pass.setPipeline(pipes.opaque);
+    drawObj(pass, W.floorObj);
+    drawObj(pass, W.tapObj); drawObj(pass, W.tapBase);
+    if (state.tool === 'mug') drawObj(pass, W.mugObj);
+    if (state.tool === 'ball') drawObj(pass, W.ballObj);
+    pass.setPipeline(pipes.glassFar);
+    drawObj(pass, W.basePane);
+    W.walls.forEach((w, i) => { if (!near[i]) drawObj(pass, w); });
+    pass.end();
+    if (stopAt <= 1) return;
+    // ---- water thickness (half res, before particle depths land in the depth buffer) ----
+    pass = enc.beginRenderPass({ colorAttachments: [{ view: S.thick.createView(), loadOp: 'clear', storeOp: 'store', clearValue: [0, 0, 0, 0] }] });
+    pass.setPipeline(pipes.thick); pass.setBindGroup(0, S.thickBG); pass.draw(6, W.count);
+    pass.end();
+    if (stopAt <= 2) return;
+    // ---- water surface depth ----
+    pass = enc.beginRenderPass({
+      colorAttachments: [{ view: S.fluidZ.createView(), loadOp: 'clear', storeOp: 'store', clearValue: [0, 0, 0, 0] }],
+      depthStencilAttachment: { view: S.depth.createView(), depthLoadOp: 'load', depthStoreOp: 'store' },
+    });
+    pass.setPipeline(pipes.depth); pass.setBindGroup(0, W.partCamBG); pass.drawIndirect(W.surfB, 0);
+    pass.end();
+    if (stopAt <= 3) return;
+    const fsPass = (pipe, bg, tgt) => {
+      const p = enc.beginRenderPass({ colorAttachments: [{ view: tgt.createView(), loadOp: 'clear', storeOp: 'store', clearValue: [0, 0, 0, 0] }] });
+      p.setPipeline(pipe); p.setBindGroup(0, bg); p.draw(3); p.end();
+    };
+    for (let i = 0; i < 2; i++) {
+      fsPass(pipes.smoothH, S.smooth1, S.fluidZ2);
+      fsPass(pipes.smoothV, S.smooth2, S.fluidZ);
+    }
+    if (stopAt <= 4) return;
+    // ---- composite water over the scene ----
+    pass = enc.beginRenderPass({ colorAttachments: [{ view: S.hdr.createView(), loadOp: 'clear', storeOp: 'store', clearValue: [0, 0, 0, 1] }] });
+    pass.setPipeline(pipes.composite); pass.setBindGroup(0, S.compBG); pass.draw(3);
+    // near glass and seams sit in front of everything inside the tank
+    pass.setBindGroup(0, W.meshCamBG);
+    pass.setPipeline(pipes.glassNear);
+    W.walls.forEach((w, i) => { if (near[i]) drawObj(pass, w); });
+    pass.end();
+    if (stopAt <= 5) return;
+    // ---- bloom ----
+    for (let i = 0; i < S.bloom.length; i++) {
+      const p = enc.beginRenderPass({ colorAttachments: [{ view: S.bloom[i].createView(), loadOp: 'clear', storeOp: 'store', clearValue: [0, 0, 0, 1] }] });
+      p.setPipeline(i === 0 ? pipes.downFirst : pipes.down); p.setBindGroup(0, S.downBG[i]); p.draw(3); p.end();
+    }
+    for (const u of S.upBG) {
+      const p = enc.beginRenderPass({ colorAttachments: [{ view: u.dst.createView(), loadOp: 'load', storeOp: 'store' }] });
+      p.setPipeline(pipes.up); p.setBindGroup(0, u.src); p.draw(3); p.end();
+    }
+    // ---- tonemap to the canvas ----
+    pass = enc.beginRenderPass({ colorAttachments: [{ view: target, loadOp: 'clear', storeOp: 'store', clearValue: [0, 0, 0, 1] }] });
+    pass.setPipeline(pipes.tone); pass.setBindGroup(0, S.toneBG); pass.draw(3);
+    pass.end();
+  }
+
+  // =====================================================================
+  // Resolution management
+  // =====================================================================
+  let renderScale = 1;
+  const forcedScale = parseFloat(params.get('scale')) || 0;
+  function targetSize() {
+    const dpr = forcedScale || Math.min(window.devicePixelRatio || 1, renderScale);
+    const w = Math.max(64, Math.round(canvas.clientWidth * dpr));
+    const h = Math.max(64, Math.round(canvas.clientHeight * dpr));
+    return [w, h];
+  }
+  function ensureScreen() {
+    const [w, h] = targetSize();
+    if (!W.screen || W.screen.w !== w || W.screen.h !== h) {
+      canvas.width = w; canvas.height = h;
+      if (W.screen) { for (const k of ['scene', 'depth', 'fluidZ', 'fluidZ2', 'thick', 'hdr']) W.screen[k].destroy(); W.screen.bloom.forEach((t) => t.destroy()); }
+      W.screen = buildScreen(w, h);
+    }
+    return W.screen;
+  }
+
+  function setQuality(name) {
+    const old = W;
+    qualityName = name;
+    W = buildWorld(name);
+    renderScale = QUALITY[name].scale;
+    resetScene(state.scene);
+    if (old) {
+      for (const b of [old.simUBO, old.posB, old.velB, old.surfB, old.accB, old.gvelB, old.goldB, old.cellB, old.pressB]) b.destroy();
+      for (const t of [old.lightZ, old.lightZ2, old.lightDepth, old.occTex, old.causTex]) t.destroy();
+      if (old.screen) { for (const k of ['scene', 'depth', 'fluidZ', 'fluidZ2', 'thick', 'hdr']) old.screen[k].destroy(); old.screen.bloom.forEach((t) => t.destroy()); }
+    }
+    perf.samples = []; perf.cooldown = 2.0;
+    const iMax = Math.PI * (W.Ro - W.wall) ** 2 * (W.Hm - W.wall);
+    W.mugCapacity = iMax / ((W.h * 0.5) ** 3);
+    for (const b of document.querySelectorAll('[data-q]')) b.setAttribute('aria-pressed', String(b.dataset.q === name));
+  }
+
+  // =====================================================================
+  // Input
+  // =====================================================================
+  const pointers = new Map();
+  let orbiting = false, lastPinch = 0, interacted = false;
+  const hintsEl = $('#hints');
+  function noteInteraction() {
+    if (!interacted) { interacted = true; setTimeout(() => hintsEl.classList.add('faded'), 9000); }
+    if (state.sound) audio.start();
+  }
+  canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+  canvas.addEventListener('pointerdown', (e) => {
+    canvas.focus();
+    noteInteraction();
+    pointers.set(e.pointerId, { x: e.clientX, y: e.clientY, type: e.pointerType });
+    canvas.setPointerCapture(e.pointerId);
+    if (e.pointerType === 'touch') {
+      if (pointers.size === 1) { state.pointer = { x: e.clientX, y: e.clientY, has: true }; }
+      else { orbiting = true; }
+      return;
+    }
+    if (e.button === 2 || e.button === 1 || e.shiftKey || e.altKey || state.tool === 'none') { orbiting = true; }
+    else if (e.button === 0) { state.pour = true; state.pointer = { x: e.clientX, y: e.clientY, has: true }; }
+  });
+  canvas.addEventListener('pointermove', (e) => {
+    const prev = pointers.get(e.pointerId);
+    if (e.pointerType === 'touch' && prev) {
+      if (pointers.size >= 2) {
+        const pts = [...pointers.values()];
+        const dx = e.clientX - prev.x, dy = e.clientY - prev.y;
+        cam.yaw -= dx * 0.004 / pointers.size; cam.pitch = Math.max(0.08, Math.min(1.35, cam.pitch + dy * 0.004 / pointers.size));
+        prev.x = e.clientX; prev.y = e.clientY;
+        const d = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+        if (lastPinch) cam.dist = Math.max(0.45, Math.min(2.4, cam.dist * lastPinch / d));
+        lastPinch = d;
+        return;
+      }
+      prev.x = e.clientX; prev.y = e.clientY;
+      state.pointer = { x: e.clientX, y: e.clientY, has: true };
+      return;
+    }
+    if (orbiting && prev) {
+      cam.yaw -= (e.clientX - prev.x) * 0.005;
+      cam.pitch = Math.max(0.08, Math.min(1.35, cam.pitch + (e.clientY - prev.y) * 0.005));
+      prev.x = e.clientX; prev.y = e.clientY;
+      return;
+    }
+    if (prev) { prev.x = e.clientX; prev.y = e.clientY; }
+    state.pointer = { x: e.clientX, y: e.clientY, has: true };
+  });
+  const endPointer = (e) => {
+    pointers.delete(e.pointerId);
+    if (pointers.size < 2) lastPinch = 0;
+    if (pointers.size === 0) { orbiting = false; state.pour = false; }
+  };
+  canvas.addEventListener('pointerup', endPointer);
+  canvas.addEventListener('pointercancel', endPointer);
+  canvas.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    noteInteraction();
+    const k = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? 400 : 1;
+    const dx = e.deltaX * k, dy = e.deltaY * k;
+    if (e.ctrlKey) { cam.dist = Math.max(0.45, Math.min(2.4, cam.dist * Math.exp(dy * 0.01))); return; }
+    if (e.shiftKey && Math.abs(dx) < Math.abs(dy)) { cam.yaw += dy * 0.004; return; }
+    state.depth = Math.max(-0.26, Math.min(0.26, state.depth + dy * 0.0006));
+    cam.yaw += dx * 0.004;
+  }, { passive: false });
+  const keys = new Set();
+  window.addEventListener('keydown', (e) => {
+    if (e.target && e.target.tagName === 'BUTTON' && (e.key === ' ' || e.key === 'Enter')) return;
+    const k = e.key.toLowerCase();
+    if (k === ' ') { state.pourKey = true; e.preventDefault(); noteInteraction(); }
+    else if (k === 'q') state.tiltKeys = 1;
+    else if (k === 'e') state.tiltKeys = -1;
+    else if (k === 'r') resetScene(state.scene);
+    else if (k === '1') setTool('mug');
+    else if (k === '2') setTool('ball');
+    else if (k === '3') setTool('none');
+    else if (k === 't') setTap(!state.tap);
+    keys.add(k);
+  });
+  window.addEventListener('keyup', (e) => {
+    const k = e.key.toLowerCase();
+    if (k === ' ') state.pourKey = false;
+    if (k === 'q' || k === 'e') state.tiltKeys = 0;
+    keys.delete(k);
+  });
+  window.addEventListener('blur', () => { keys.clear(); state.pour = state.pourKey = false; state.tiltKeys = 0; });
+  function applyKeys(dt) {
+    if (keys.has('a') || keys.has('arrowleft')) cam.yaw += 1.4 * dt;
+    if (keys.has('d') || keys.has('arrowright')) cam.yaw -= 1.4 * dt;
+    if (keys.has('arrowup')) cam.pitch = Math.min(1.35, cam.pitch + 1.0 * dt);
+    if (keys.has('arrowdown')) cam.pitch = Math.max(0.08, cam.pitch - 1.0 * dt);
+    if (keys.has('w')) state.depth = Math.max(-0.26, state.depth + 0.25 * dt);
+    if (keys.has('s')) state.depth = Math.min(0.26, state.depth - 0.25 * dt);
+    if (keys.has('=') || keys.has('+')) cam.dist = Math.max(0.45, cam.dist * Math.exp(-dt));
+    if (keys.has('-')) cam.dist = Math.min(2.4, cam.dist * Math.exp(dt));
+  }
+
+  // ---- dock ----
+  function setTool(t) {
+    state.tool = t;
+    for (const b of document.querySelectorAll('[data-tool]')) b.setAttribute('aria-pressed', String(b.dataset.tool === t));
+    $('#gauge').hidden = t !== 'mug';
+    if (t === 'ball') tool.ballPos = tool.ballPrev = clampBall(tool.target);
+  }
+  for (const b of document.querySelectorAll('[data-tool]')) b.addEventListener('click', () => setTool(b.dataset.tool));
+  for (const b of document.querySelectorAll('[data-scene]')) b.addEventListener('click', () => {
+    resetScene(b.dataset.scene);
+    for (const x of document.querySelectorAll('[data-scene]')) x.setAttribute('aria-pressed', String(x === b));
+  });
+  for (const b of document.querySelectorAll('[data-q]')) b.addEventListener('click', () => { if (b.dataset.q !== qualityName) setQuality(b.dataset.q); });
+  const soundBtn = $('#soundBtn');
+  soundBtn.addEventListener('click', () => {
+    audio.setEnabled(!state.sound);
+    soundBtn.setAttribute('aria-pressed', String(state.sound));
+    soundBtn.textContent = state.sound ? 'Sound on' : 'Sound off';
+  });
+  const tapBtn = $('#tapBtn');
+  function setTap(on) { state.tap = on; tapBtn.setAttribute('aria-pressed', String(on)); tapBtn.textContent = on ? 'Tap on' : 'Tap off'; }
+  tapBtn.addEventListener('click', () => setTap(!state.tap));
+  const pourBtn = $('#pourBtn');
+  pourBtn.addEventListener('pointerdown', (e) => { e.preventDefault(); state.pourTouch = true; pourBtn.setAttribute('aria-pressed', 'true'); noteInteraction(); });
+  for (const ev of ['pointerup', 'pointercancel', 'pointerleave']) pourBtn.addEventListener(ev, () => { state.pourTouch = false; pourBtn.setAttribute('aria-pressed', 'false'); });
+
+  // =====================================================================
+  // Loop
+  // =====================================================================
+  const perf = { samples: [], cooldown: 2.0, gpu: 0, fps: 60, frameTimes: [], start: performance.now(), downgraded: false, note: '' };
+  const statsEl = $('#stats'), gaugeFill = $('#gaugeFill'), gaugeVal = $('#gaugeVal');
+  let lastT = performance.now(), statsTimer = 0, gaugeSmooth = 0;
+
+  setQuality(qualityName);
+  updateCamera(canvas.clientWidth / Math.max(1, canvas.clientHeight));
+  const initErr = await device.popErrorScope();
+  if (initErr) { showMessage('The GPU rejected a shader', 'Your browser\'s WebGPU said: ' + initErr.message.split('\n')[0]); console.error(initErr.message); return; }
+  msgEl.hidden = true;
+
+  function readStats(enc, rb) {
+    enc.copyBufferToBuffer(W.accB, W.statsOff, rb.buf, 0, 16);
+    enc.clearBuffer(W.accB, W.statsOff, 16);
+  }
+
+  let inFlight = 0;
+  const surfArgs = new Uint32Array([12, 0, 0, 0]);
+  function frame(now) {
+    // never queue more than two frames on the GPU: keeps input latency low when the GPU is the bottleneck
+    if (inFlight >= 2) { requestAnimationFrame(frame); return; }
+    const dtReal = Math.min(0.05, Math.max(0.001, (now - lastT) / 1000));
+    lastT = now;
+    perf.frameTimes.push(dtReal); if (perf.frameTimes.length > 30) perf.frameTimes.shift();
+    applyKeys(dtReal);
+    const S = ensureScreen();
+    updateCamera(S.w / S.h);
+    updateToolTarget();
+
+    // past 40 fps, run slightly slow-motion rather than piling on substeps (which would only slow things more)
+    const frameDt = Math.min(dtReal, 1 / 40);
+    const nsub = Math.max(1, Math.min(W.MAXSUB - 1, Math.ceil(frameDt / W.q.maxSub - 0.05)));
+    const dt = frameDt / nsub;
+    stepTool(frameDt);
+    W.calm -= frameDt;
+    writeSimUniforms(nsub, dt, frameDt);
+    writeCamUniforms(S, now / 1000);
+
+    // mug / ball model matrices
+    if (state.tool === 'mug') setObj(W.mugObj, mugModel(tool.pos, tool.yaw, tool.tilt), 1, [0.56, 0.16, 0.065, 1], W.Hm);
+    if (state.tool === 'ball') setObj(W.ballObj, M4.trans(...tool.ballPos), 2);
+
+    if (!dbg.nosim) device.queue.writeBuffer(W.surfB, 0, surfArgs);
+    const enc = device.createCommandEncoder();
+    if (!dbg.nosim) encodeSim(enc, nsub);
+    const rb = W.readBufs.find((r) => !r.busy);
+    if (rb) readStats(enc, rb); else enc.clearBuffer(W.accB, W.statsOff, 16);
+    if (!dbg.nolight && !dbg.noview) encodeLight(enc);
+    let grab = false;
+    if (!dbg.noview) {
+      encodeView(enc, S, OFF ? S.off.createView() : ctx.getCurrentTexture().createView());
+      if (OFF && !S.offBusy) { grab = true; enc.copyTextureToBuffer({ texture: S.off }, { buffer: S.offBuf, bytesPerRow: S.bpr }, [S.w, S.h]); }
+    }
+    const tSubmit = performance.now();
+    device.queue.submit([enc.finish()]);
+    W.frame++;
+    if (grab) {
+      S.offBusy = true;
+      S.offBuf.mapAsync(GPUMapMode.READ).then(() => {
+        const src = new Uint8Array(S.offBuf.getMappedRange());
+        const img = new ImageData(S.w, S.h);
+        for (let y = 0; y < S.h; y++) img.data.set(src.subarray(y * S.bpr, y * S.bpr + S.w * 4), y * S.w * 4);
+        S.offBuf.unmap(); S.offBusy = false;
+        ctx2d.putImageData(img, 0, 0);
+        window.__grabbed = (window.__grabbed || 0) + 1;
+      }).catch(() => { S.offBusy = false; });
+    }
+    const Wref = W;
+    if (rb) {
+      rb.busy = true;
+      rb.buf.mapAsync(GPUMapMode.READ).then(() => {
+        const a = new Int32Array(rb.buf.getMappedRange().slice(0));
+        rb.buf.unmap(); rb.busy = false;
+        if (Wref !== W) return;
+        W.stats = [a[0] / 1000, a[1] / Math.max(1, nsub), a[2] / Math.max(1, nsub), a[3]];
+      }).catch(() => { rb.busy = false; });
+    }
+    inFlight++;
+    device.queue.onSubmittedWorkDone().then(() => { inFlight--; perf.gpu = perf.gpu * 0.9 + (performance.now() - tSubmit) * 0.1; });
+
+    // adaptive resolution: keep the frame inside its budget
+    perf.cooldown -= dtReal;
+    if (perf.cooldown <= 0 && perf.frameTimes.length >= 30) {
+      const avg = perf.frameTimes.reduce((a, b) => a + b, 0) / perf.frameTimes.length;
+      const q = QUALITY[qualityName];
+      if (avg > 1 / 50 && renderScale > 0.6) { renderScale = Math.max(0.6, renderScale - 0.12); perf.cooldown = 1.5; }
+      else if (avg > 1 / 38 && renderScale <= 0.6 && !perf.downgraded && now - perf.start < 15000 && qualityName !== 'low' && !params.has('q')) {
+        // this machine can't hold the frame rate even at minimum resolution: drop the particle count once
+        perf.downgraded = true;
+        setQuality(qualityName === 'high' ? 'medium' : 'low');
+        perf.note = 'switched to lower detail to stay smooth';
+      }
+      else if (avg < 1 / 58 && perf.gpu < 9 && renderScale < q.maxScale) { renderScale = Math.min(q.maxScale, renderScale + 0.08); perf.cooldown = 2.5; }
+      else perf.cooldown = 0.5;
+    }
+
+    audio.update(W.stats[0], W.stats[2], dtReal);
+    const fill = state.tool === 'mug' ? Math.min(1, W.stats[1] / W.mugCapacity) : 0;
+    gaugeSmooth += (fill - gaugeSmooth) * 0.2;
+    statsTimer -= dtReal;
+    if (statsTimer <= 0) {
+      statsTimer = 0.25;
+      const avg = perf.frameTimes.reduce((a, b) => a + b, 0) / perf.frameTimes.length;
+      statsEl.textContent = `${W.count.toLocaleString('en-US')} particles  ${W.NX}×${W.NY}×${W.NZ} grid\n${(1 / avg).toFixed(0).padStart(3)} fps  ${S.w}×${S.h}  ${nsub} substeps${perf.note ? '\n' + perf.note : ''}`;
+      gaugeFill.style.height = (gaugeSmooth * 100).toFixed(1) + '%';
+      gaugeVal.textContent = Math.round(gaugeSmooth * 100) + '%';
+    }
+    requestAnimationFrame(frame);
+  }
+  window.__sandbox = {
+    state, cam, tool, dbg, setTap, dbgView(m) { params.set('dbg', String(m)); }, get W() { return W; }, setTool, resetScene, setQuality,
+    async probe() {
+      const n = W.count, rb = device.createBuffer({ size: n * 32, usage: U.MAP_READ | U.COPY_DST });
+      const e = device.createCommandEncoder(); e.copyBufferToBuffer(W.posB, 0, rb, 0, n * 16); e.copyBufferToBuffer(W.velB, 0, rb, n * 16, n * 16); device.queue.submit([e.finish()]);
+      await rb.mapAsync(GPUMapMode.READ);
+      const all = new Float32Array(rb.getMappedRange().slice(0)); rb.unmap(); rb.destroy();
+      const a = all.subarray(0, n * 4), v = all.subarray(n * 4);
+      let sp = 0, spMax = 0; for (let i = 0; i < n; i++) { const s2 = Math.hypot(v[i * 4], v[i * 4 + 1], v[i * 4 + 2]) * W.h; sp += s2; spMax = Math.max(spMax, s2); }
+      let sy = 0, my = 0, foam = 0, bad = 0; const hist = new Array(W.NY).fill(0);
+      for (let i = 0; i < n; i++) { const y = a[i * 4 + 1]; if (!isFinite(y)) { bad++; continue; } sy += y; my = Math.max(my, y); foam += a[i * 4 + 3]; hist[Math.min(W.NY - 1, Math.floor(y))]++; }
+      const stuck = [];
+      let surfY = 0; { let c = 0; for (let i = 0; i < n; i++) { const y = a[i * 4 + 1]; if (y > 2) { surfY += y; c++; } } surfY = surfY / Math.max(c, 1); }
+      for (let i = 0; i < n && stuck.length < 12; i++) {
+        const y = a[i * 4 + 1], s2 = Math.hypot(v[i * 4], v[i * 4 + 1], v[i * 4 + 2]) * W.h;
+        if (y * W.h > 0.142 && s2 < 0.08) stuck.push([a[i * 4], a[i * 4 + 1], a[i * 4 + 2], v[i * 4], v[i * 4 + 1], v[i * 4 + 2]].map((x) => +x.toFixed(2)));
+      }
+      let nStuck = 0; for (let i = 0; i < n; i++) { const y = a[i * 4 + 1], s2 = Math.hypot(v[i * 4], v[i * 4 + 1], v[i * 4 + 2]) * W.h; if (y * W.h > 0.142 && s2 < 0.08) nStuck++; }
+      return { stuck, nStuck, n, speed: sp / n, speedMax: spMax, meanY: sy / n * W.h, maxY: my * W.h, foam: foam / n, bad, top: hist.map((c, j) => c / (W.NX * W.NZ * 8)).map((v) => +v.toFixed(2)) };
+    },
+  };
+  requestAnimationFrame(frame);
+}
+
+main().catch((err) => {
+  console.error(err);
+  showMessage('Something went wrong starting the sandbox', String(err && err.message || err));
+});
+</script>
+</body>
+</html>
